@@ -33,6 +33,8 @@ interface ViewerProps {
   isPlanDiffActive?: boolean;
   onPlanDiffToggle?: () => void;
   hasPreviousVersion?: boolean;
+  /** Show amber "Demo" badge (portal mode, no shared content loaded) */
+  showDemoBadge?: boolean;
 }
 
 export interface ViewerHandle {
@@ -93,6 +95,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   isPlanDiffActive,
   onPlanDiffToggle,
   hasPreviousVersion,
+  showDemoBadge,
   onOpenLinkedDoc,
   linkedDocInfo,
 }, ref) => {
@@ -648,8 +651,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
           linkedDocInfo ? 'border-2 border-primary' : 'border border-border/50'
         }`}
       >
-        {/* Repo info + plan diff badge + linked doc badge - top left */}
-        {(repoInfo || hasPreviousVersion || linkedDocInfo) && (
+        {/* Repo info + plan diff badge + demo badge + linked doc badge - top left */}
+        {(repoInfo || hasPreviousVersion || showDemoBadge || linkedDocInfo) && (
           <div className="absolute top-3 left-3 md:top-4 md:left-5 flex flex-col items-start gap-1 text-[9px] text-muted-foreground/50 font-mono">
             {repoInfo && !linkedDocInfo && (
               <div className="flex items-center gap-1.5">
@@ -673,6 +676,11 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
                 onToggle={onPlanDiffToggle}
                 hasPreviousVersion={hasPreviousVersion ?? false}
               />
+            )}
+            {showDemoBadge && !linkedDocInfo && (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                Demo
+              </span>
             )}
             {linkedDocInfo && (
               <div className="flex items-center gap-1.5">

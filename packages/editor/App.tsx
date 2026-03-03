@@ -453,6 +453,8 @@ const App: React.FC = () => {
     clearPendingSharedAnnotations,
     generateShortUrl,
     importFromShareUrl,
+    shareLoadError,
+    clearShareLoadError,
   } = useSharing(
     markdown,
     annotations,
@@ -1277,6 +1279,7 @@ const App: React.FC = () => {
                   isPlanDiffActive={isPlanDiffActive}
                   onPlanDiffToggle={() => setIsPlanDiffActive(!isPlanDiffActive)}
                   hasPreviousVersion={!linkedDocHook.isActive && planDiff.hasPreviousVersion}
+                  showDemoBadge={!isApiMode && !isLoadingShared && !isSharedSession}
                   onOpenLinkedDoc={linkedDocHook.open}
                   linkedDocInfo={linkedDocHook.isActive ? { filepath: linkedDocHook.filepath!, onBack: linkedDocHook.back } : null}
                 />
@@ -1384,6 +1387,16 @@ const App: React.FC = () => {
           cancelText="Cancel"
           variant="warning"
           showCancel
+        />
+
+        {/* Shared URL load failure warning */}
+        <ConfirmDialog
+          isOpen={!!shareLoadError && !isApiMode}
+          onClose={clearShareLoadError}
+          title="Shared Plan Could Not Be Loaded"
+          message={shareLoadError}
+          subMessage="You are viewing a demo plan. This is sample content — it is not your data or anyone else's."
+          variant="warning"
         />
 
         {/* Save-to-notes toast */}
