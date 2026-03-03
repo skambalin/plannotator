@@ -156,6 +156,8 @@ Send Annotations → feedback sent to agent session
 | `/api/image`          | GET    | Serve image by path query param            |
 | `/api/upload`         | POST   | Upload image, returns `{ path, originalName }` |
 | `/api/obsidian/vaults`| GET    | Detect available Obsidian vaults           |
+| `/api/reference/obsidian/files` | GET | List vault markdown files as nested tree (`?vaultPath=<path>`) |
+| `/api/reference/obsidian/doc`   | GET | Read a vault markdown file (`?vaultPath=<path>&path=<file>`) |
 | `/api/plan/vscode-diff` | POST   | Open diff in VS Code (body: baseVersion)   |
 | `/api/doc`              | GET    | Serve linked .md/.mdx file (`?path=<path>`) |
 

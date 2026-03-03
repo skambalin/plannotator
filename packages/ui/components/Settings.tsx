@@ -678,6 +678,29 @@ tags: [plan, ...]
 ---`}
                             </pre>
                           </div>
+
+                          <div className="border-t border-border/30 pt-3">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="text-xs font-medium">Vault Browser</div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  Browse and annotate vault files from the sidebar
+                                </div>
+                              </div>
+                              <button
+                                role="switch"
+                                aria-checked={obsidian.vaultBrowserEnabled}
+                                onClick={() => handleObsidianChange({ vaultBrowserEnabled: !obsidian.vaultBrowserEnabled })}
+                                className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                                  obsidian.vaultBrowserEnabled ? 'bg-primary' : 'bg-muted'
+                                }`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                                  obsidian.vaultBrowserEnabled ? 'translate-x-6' : 'translate-x-1'
+                                }`} />
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       )}
                     </div>
