@@ -561,41 +561,46 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     window.getSelection()?.removeAllRanges();
   };
 
-  const handleCodeBlockAnnotate = (type: AnnotationType) => {
-    const highlighter = highlighterRef.current;
-    if (!hoveredCodeBlock || !highlighter) return;
-
-    const codeEl = hoveredCodeBlock.element.querySelector('code');
-    if (!codeEl) return;
-
+  const applyCodeBlockAnnotation = (
+    blockId: string,
+    codeEl: Element,
+    type: AnnotationType,
+    text?: string,
+    images?: ImageAttachment[],
+  ) => {
     const id = `codeblock-${Date.now()}`;
     const codeText = codeEl.textContent || '';
 
     const wrapper = document.createElement('mark');
-    wrapper.className = 'annotation-highlight';
+    wrapper.className = `annotation-highlight ${type === AnnotationType.DELETION ? 'deletion' : type === AnnotationType.COMMENT ? 'comment' : ''}`.trim();
     wrapper.dataset.bindId = id;
     wrapper.textContent = codeText;
-
-    if (type === AnnotationType.DELETION) {
-      wrapper.classList.add('deletion');
-    }
 
     codeEl.innerHTML = '';
     codeEl.appendChild(wrapper);
 
     const newAnnotation: Annotation = {
       id,
-      blockId: hoveredCodeBlock.block.id,
+      blockId,
       startOffset: 0,
       endOffset: codeText.length,
       type,
+      text,
       originalText: codeText,
       createdA: Date.now(),
       author: getIdentity(),
+      images,
     };
 
     onAddAnnotationRef.current(newAnnotation);
     window.getSelection()?.removeAllRanges();
+  };
+
+  const handleCodeBlockAnnotate = (type: AnnotationType) => {
+    if (!hoveredCodeBlock) return;
+    const codeEl = hoveredCodeBlock.element.querySelector('code');
+    if (!codeEl) return;
+    applyCodeBlockAnnotation(hoveredCodeBlock.block.id, codeEl, type);
     setHoveredCodeBlock(null);
   };
 
@@ -658,37 +663,10 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
       );
       pendingSourceRef.current = null;
       window.getSelection()?.removeAllRanges();
-    } else if (commentPopover.codeBlock && highlighterRef.current) {
-      // Code block annotation path
-      const { block, element } = commentPopover.codeBlock;
-      const codeEl = element.querySelector('code');
+    } else if (commentPopover.codeBlock) {
+      const codeEl = commentPopover.codeBlock.element.querySelector('code');
       if (codeEl) {
-        const id = `codeblock-${Date.now()}`;
-        const codeText = codeEl.textContent || '';
-
-        const wrapper = document.createElement('mark');
-        wrapper.className = 'annotation-highlight comment';
-        wrapper.dataset.bindId = id;
-        wrapper.textContent = codeText;
-
-        codeEl.innerHTML = '';
-        codeEl.appendChild(wrapper);
-
-        const newAnnotation: Annotation = {
-          id,
-          blockId: block.id,
-          startOffset: 0,
-          endOffset: codeText.length,
-          type: AnnotationType.COMMENT,
-          text,
-          originalText: codeText,
-          createdA: Date.now(),
-          author: getIdentity(),
-          images,
-        };
-
-        onAddAnnotationRef.current(newAnnotation);
-        window.getSelection()?.removeAllRanges();
+        applyCodeBlockAnnotation(commentPopover.codeBlock.block.id, codeEl, AnnotationType.COMMENT, text, images);
       }
     }
 
