@@ -47,6 +47,7 @@ import {
 import { useAgents } from '../hooks/useAgents';
 import { KeyboardShortcuts } from './KeyboardShortcuts';
 import { type QuickLabel, getQuickLabels, saveQuickLabels, resetQuickLabels, DEFAULT_QUICK_LABELS, getLabelColors, LABEL_COLOR_MAP } from '../utils/quickLabels';
+import { hasNewSettings, markNewSettingsSeen } from '../utils/newSettingsHint';
 
 type SettingsTab = 'general' | 'display' | 'saving' | 'labels' | 'shortcuts' | 'obsidian' | 'bear';
 
@@ -85,6 +86,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
   const [quickLabelsState, setQuickLabelsState] = useState<QuickLabel[]>([]);
   const [editingTipIndex, setEditingTipIndex] = useState<number | null>(null);
   const [editingTipValue, setEditingTipValue] = useState('');
+  const [showNewHints, setShowNewHints] = useState(() => hasNewSettings());
 
   // Fetch available agents for OpenCode
   const { agents: availableAgents, validateAgent, getAgentWarning } = useAgents(origin ?? null);
@@ -114,7 +116,8 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
 
   useEffect(() => {
     if (showDialog) {
-      setIdentity(getIdentity());
+      if (showNewHints) markNewSettingsSeen();
+      setIdentity(getIdentity())
       setObsidian(getObsidianSettings());
       setBear(getBearSettings());
       setAgent(getAgentSwitchSettings());
@@ -202,13 +205,19 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
     <>
       <button
         onClick={() => setShowDialog(true)}
-        className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        className="relative p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         title="Settings"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
+        {showNewHints && !showDialog && (
+          <span className="absolute top-0 right-0 flex h-2 w-2">
+            <span className="absolute inset-0 rounded-full bg-primary opacity-60 animate-[settings-ping_2s_cubic-bezier(0,0,0.2,1)_infinite]" />
+            <span className="relative rounded-full h-2 w-2 bg-primary" />
+          </span>
+        )}
       </button>
 
       {showDialog && createPortal(
@@ -240,13 +249,16 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`px-3 py-1.5 rounded text-xs whitespace-nowrap transition-colors ${
+                    className={`px-3 py-1.5 rounded text-xs whitespace-nowrap transition-colors flex items-center gap-1.5 ${
                       activeTab === tab.id
                         ? 'bg-primary/10 text-primary font-medium'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                     }`}
                   >
                     {tab.label}
+                    {showNewHints && (tab.id === 'display' || tab.id === 'labels') && (
+                      <span className="text-[8px] font-semibold uppercase tracking-wide px-1 py-px rounded-full bg-primary/15 text-primary leading-none">new</span>
+                    )}
                   </button>
                 ))}
               </nav>
@@ -258,13 +270,16 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                     <button
                       key={tab.id}
                       onClick={() => setActiveTab(tab.id)}
-                      className={`w-full text-left px-3 py-1.5 rounded text-sm transition-colors ${
+                      className={`w-full text-left px-3 py-1.5 rounded text-sm transition-colors flex items-center justify-between ${
                         activeTab === tab.id
                           ? 'bg-primary/10 text-primary font-medium'
                           : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                       }`}
                     >
                       {tab.label}
+                      {showNewHints && (tab.id === 'display' || tab.id === 'labels') && (
+                        <span className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-primary/15 text-primary leading-none">new</span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -521,7 +536,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                     {/* Plan Width */}
                     <div className="space-y-3">
                       <div>
-                        <div className="text-sm font-medium">Plan Width</div>
+                        <div className="text-sm font-medium flex items-center gap-2">Plan Width{showNewHints && <span className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-primary/15 text-primary leading-none">new</span>}</div>
                         <div className="text-xs text-muted-foreground">
                           Maximum width of the plan card
                         </div>
@@ -762,7 +777,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                   <>
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="text-sm font-medium">Quick Labels</div>
+                        <div className="text-sm font-medium flex items-center gap-2">Quick Labels{showNewHints && <span className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-primary/15 text-primary leading-none">new</span>}</div>
                         <div className="text-xs text-muted-foreground">
                           Preset annotations for one-click feedback
                         </div>
