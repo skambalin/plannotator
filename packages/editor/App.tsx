@@ -97,7 +97,9 @@ const App: React.FC = () => {
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [initialExportTab, setInitialExportTab] = useState<'share' | 'annotations' | 'notes'>();
   const [noteSaveToast, setNoteSaveToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  // Plan diff state
+  // Plan diff state — memoize filtered annotation lists to avoid new references per render
+  const diffAnnotations = useMemo(() => annotations.filter(a => !!a.diffContext), [annotations]);
+  const viewerAnnotations = useMemo(() => annotations.filter(a => !a.diffContext), [annotations]);
   const [isPlanDiffActive, setIsPlanDiffActive] = useState(false);
   const [planDiffMode, setPlanDiffMode] = useState<PlanDiffMode>('clean');
   const [previousPlan, setPreviousPlan] = useState<string | null>(null);
@@ -271,7 +273,7 @@ const App: React.FC = () => {
       if (restoredGlobal.length > 0) setGlobalAttachments(restoredGlobal);
       // Apply highlights to DOM after a tick
       setTimeout(() => {
-        viewerRef.current?.applySharedAnnotations(restored);
+        viewerRef.current?.applySharedAnnotations(restored.filter(a => !a.diffContext));
       }, 100);
     }
   }, [restoreDraft]);
@@ -286,7 +288,7 @@ const App: React.FC = () => {
       const timer = setTimeout(() => {
         // Clear existing highlights first (important when loading new share URL)
         viewerRef.current?.clearAllHighlights();
-        viewerRef.current?.applySharedAnnotations(pendingSharedAnnotations);
+        viewerRef.current?.applySharedAnnotations(pendingSharedAnnotations.filter(a => !a.diffContext));
         clearPendingSharedAnnotations();
       }, 100);
       return () => clearTimeout(timer);
@@ -1254,27 +1256,36 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Plan Diff View or Normal Plan View */}
-              {isPlanDiffActive && planDiff.diffBlocks && planDiff.diffStats ? (
-                <PlanDiffViewer
-                  diffBlocks={planDiff.diffBlocks}
-                  diffStats={planDiff.diffStats}
-                  diffMode={planDiffMode}
-                  onDiffModeChange={setPlanDiffMode}
-                  onPlanDiffToggle={() => setIsPlanDiffActive(false)}
-                  repoInfo={repoInfo}
-                  baseVersionLabel={planDiff.diffBaseVersion != null ? `v${planDiff.diffBaseVersion}` : undefined}
-                  baseVersion={planDiff.diffBaseVersion ?? undefined}
-                  maxWidth={planMaxWidth}
-                />
-              ) : (
+              {/* Plan Diff View — rendered when diff data exists, hidden when inactive */}
+              {planDiff.diffBlocks && planDiff.diffStats && (
+                <div className="w-full flex justify-center" style={{ display: isPlanDiffActive ? undefined : 'none' }}>
+                  <PlanDiffViewer
+                    diffBlocks={planDiff.diffBlocks}
+                    diffStats={planDiff.diffStats}
+                    diffMode={planDiffMode}
+                    onDiffModeChange={setPlanDiffMode}
+                    onPlanDiffToggle={() => setIsPlanDiffActive(false)}
+                    repoInfo={repoInfo}
+                    baseVersionLabel={planDiff.diffBaseVersion != null ? `v${planDiff.diffBaseVersion}` : undefined}
+                    baseVersion={planDiff.diffBaseVersion ?? undefined}
+                    maxWidth={planMaxWidth}
+                    annotations={diffAnnotations}
+                    onAddAnnotation={handleAddAnnotation}
+                    onSelectAnnotation={handleSelectAnnotation}
+                    selectedAnnotationId={selectedAnnotationId}
+                    mode={editorMode}
+                  />
+                </div>
+              )}
+              {/* Normal Plan View — always mounted, hidden during diff mode */}
+              <div className="w-full flex justify-center" style={{ display: isPlanDiffActive && planDiff.diffBlocks ? 'none' : undefined }}>
                 <Viewer
                   key={linkedDocHook.isActive ? `doc:${linkedDocHook.filepath}` : 'plan'}
                   ref={viewerRef}
                   blocks={blocks}
                   markdown={markdown}
                   frontmatter={frontmatter}
-                  annotations={annotations}
+                  annotations={viewerAnnotations}
                   onAddAnnotation={handleAddAnnotation}
                   onSelectAnnotation={handleSelectAnnotation}
                   selectedAnnotationId={selectedAnnotationId}
@@ -1296,7 +1307,7 @@ const App: React.FC = () => {
                   linkedDocInfo={linkedDocHook.isActive ? { filepath: linkedDocHook.filepath!, onBack: handleLinkedDocBack, label: vaultBrowser.activeFile ? 'Vault File' : undefined } : null}
                   imageBaseDir={imageBaseDir}
                 />
-              )}
+              </div>
             </div>
           </main>
 
