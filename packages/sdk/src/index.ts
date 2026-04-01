@@ -1,10 +1,5 @@
 // Server — plan review
-export {
-  startPlannotatorServer,
-  handleServerReady,
-  type ServerOptions,
-  type ServerResult,
-} from "./server/plan";
+export { startPlannotatorServer, handleServerReady, type ServerOptions, type ServerResult } from './server/plan';
 
 // Server — code review
 export {
@@ -12,7 +7,7 @@ export {
   handleReviewServerReady,
   type ReviewServerOptions,
   type ReviewServerResult,
-} from "./server/review";
+} from './server/review';
 
 // Server — annotate
 export {
@@ -20,7 +15,7 @@ export {
   handleAnnotateServerReady,
   type AnnotateServerOptions,
   type AnnotateServerResult,
-} from "./server/annotate";
+} from './server/annotate';
 
 // Git operations
 export {
@@ -40,7 +35,7 @@ export {
   type DiffResult,
   type GitContext,
   type WorktreeInfo,
-} from "./git";
+} from './git';
 
 // PR operations
 export {
@@ -65,13 +60,13 @@ export {
   type PRContext,
   type PRReviewFileComment,
   type GithubPRMetadata,
-} from "./pr";
+} from './pr';
 
 // Remote session detection
-export { isRemoteSession, getServerPort } from "./remote";
+export { isRemoteSession, getServerPort } from './remote';
 
 // Browser launch
-export { openBrowser, isWSL } from "./browser";
+export { openBrowser, isWSL } from './browser';
 
 // File resolution
 export {
@@ -80,13 +75,10 @@ export {
   isAbsoluteMarkdownPath,
   hasMarkdownFiles,
   type ResolveResult,
-} from "./files";
+} from './files';
 
 // Feedback templates
-export { planDenyFeedback, type PlanDenyFeedbackOptions } from "./feedback";
+export { planDenyFeedback, type PlanDenyFeedbackOptions } from './feedback';
 
 // HTML accessors (SDK-native)
-export { getPlanHtml, getReviewHtml } from "./html";
-
-// SDK types
-export type { SDKClient } from "./types";
+export { getPlanHtml, getReviewHtml } from './html';
