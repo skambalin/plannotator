@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": true,
+    "allowImportingTsExtensions": true,
+    "rootDir": "..",
+    "outDir": "./dist-tsc",
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "types": ["bun-types"],
+    "paths": {
+      "@plannotator/server": ["../server/index.ts"],
+      "@plannotator/server/*": ["../server/*.ts"],
+      "@plannotator/shared/*": ["../shared/*.ts"],
+      "@plannotator/ai": ["../ai/index.ts"],
+      "@plannotator/ai/*": ["../ai/*.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}

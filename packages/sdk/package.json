@@ -1,0 +1,42 @@
+{
+  "name": "@plannotator/sdk",
+  "version": "0.16.2",
+  "private": false,
+  "type": "module",
+  "description": "Plannotator SDK — server-side capabilities for external plugin projects",
+  "author": "backnotprop",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/backnotprop/plannotator.git",
+    "directory": "packages/sdk"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "clean": "rm -rf package dist",
+    "build": "bun run build.ts",
+    "package": "bun run clean && bun run build && clean-publish",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "peerDependencies": {
+    "bun": ">= 1.0.0"
+  },
+  "devDependencies": {
+    "@plannotator/ai": "workspace:*",
+    "@plannotator/server": "workspace:*",
+    "@plannotator/shared": "workspace:*",
+    "clean-publish": "^6.0.5",
+    "dts-bundle-generator": "^9.5.1",
+    "listr2": "^10.2.1"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "withoutPublish": true,
+  "tempDir": "package",
+  "files": ["build.ts", "src", "tsconfig.json", "tsconfig.build.json"]
+}

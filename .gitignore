@@ -16,6 +16,9 @@ dist-ssr
 # npm pack output
 *.tgz
 
+# SDK clean-publish output
+packages/sdk/package
+
 # VS Code extension package
 *.vsix
 
