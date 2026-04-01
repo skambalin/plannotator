@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "build": "bun run build.ts",
+    "package": "bun run build && clean-publish",
     "typecheck": "bunx tsc --noEmit"
   },
   "peerDependencies": {
@@ -33,6 +34,7 @@
     "@plannotator/ai": "workspace:*",
     "@plannotator/server": "workspace:*",
     "@plannotator/shared": "workspace:*",
+    "clean-publish": "^6.0.5",
     "dts-bundle-generator": "^9.5.1",
     "listr2": "^10.2.1"
   }
