@@ -1,6 +1,7 @@
 import { $ } from "bun";
 import { resolve, join } from "node:path";
 import { existsSync, mkdirSync, copyFileSync } from "node:fs";
+import { Listr, type ListrTask } from "listr2";
 
 const ROOT = resolve(import.meta.dir, "../..");
 const SDK_DIR = import.meta.dir;
@@ -10,69 +11,91 @@ const DIST_DIR = join(SDK_DIR, "dist");
 const PLAN_HTML = join(ROOT, "apps/hook/dist/index.html");
 const REVIEW_HTML = join(ROOT, "apps/hook/dist/review.html");
 
-// Phase 1: Validate HTML prerequisites
-console.log("Phase 1: Validating HTML prerequisites...");
-const missing: string[] = [];
-if (!existsSync(PLAN_HTML)) missing.push(PLAN_HTML);
-if (!existsSync(REVIEW_HTML)) missing.push(REVIEW_HTML);
+const validatePrerequisites: ListrTask = {
+  title: "Validate HTML prerequisites",
+  task: () => {
+    const missing: string[] = [];
+    if (!existsSync(PLAN_HTML)) missing.push(PLAN_HTML);
+    if (!existsSync(REVIEW_HTML)) missing.push(REVIEW_HTML);
 
-if (missing.length > 0) {
-  console.error("Missing HTML prerequisites:");
-  for (const path of missing) {
-    console.error(`  - ${path}`);
-  }
-  console.error(
-    "\nRun 'bun run build:hook' first.",
-  );
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing HTML prerequisites:\n${missing.map((p) => `  - ${p}`).join("\n")}\n\nRun 'bun run build:hook' first.`,
+      );
+    }
+  },
+};
+
+const ensureDistDir: ListrTask = {
+  title: "Ensure dist directory",
+  task: () => {
+    if (!existsSync(DIST_DIR)) {
+      mkdirSync(DIST_DIR, { recursive: true });
+    }
+  },
+};
+
+const bundleWithBun: ListrTask = {
+  title: "Bundle with Bun",
+  task: async () => {
+    const buildResult = await Bun.build({
+      entrypoints: [join(SDK_DIR, "src/index.ts")],
+      outdir: DIST_DIR,
+      target: "bun",
+    });
+
+    if (!buildResult.success) {
+      throw new Error(
+        `Build failed:\n${buildResult.logs.map((log) => String(log)).join("\n")}`,
+      );
+    }
+  },
+};
+
+const generateTypes: ListrTask = {
+  title: "Generate type declarations",
+  task: async (ctx, task) => {
+    // Uses dts-bundle-generator to produce a single dist/index.d.ts with all types
+    // inlined — no @plannotator/* package specifiers that external consumers can't resolve.
+    // stderr warnings (bun-types conflicts) are expected and safe to ignore; the tool
+    // still produces correct output.
+    const entryPoint = join(SDK_DIR, "src/index.ts");
+    const tsconfigPath = join(SDK_DIR, "tsconfig.build.json");
+    const dtsOutput = join(DIST_DIR, "index.d.ts");
+    const dtsResult =
+      await $`bunx dts-bundle-generator --project ${tsconfigPath} -o ${dtsOutput} ${entryPoint}`
+        .quiet()
+        .nothrow();
+
+    if (!existsSync(dtsOutput)) {
+      throw new Error(
+        `dts-bundle-generator failed to produce output\n${dtsResult.stderr.toString()}`,
+      );
+    }
+
+    if (dtsResult.exitCode !== 0) {
+      task.output =
+        "dts-bundle-generator exited with warnings (output produced successfully)";
+    }
+  },
+};
+
+const copyHtmlFiles: ListrTask = {
+  title: "Copy HTML files",
+  task: () => {
+    copyFileSync(PLAN_HTML, join(DIST_DIR, "plannotator.html"));
+    copyFileSync(REVIEW_HTML, join(DIST_DIR, "review-editor.html"));
+  },
+};
+
+const listr = new Listr([
+  validatePrerequisites,
+  ensureDistDir,
+  bundleWithBun,
+  generateTypes,
+  copyHtmlFiles,
+]);
+
+await listr.run().catch(() => {
   process.exit(1);
-}
-
-// Ensure dist directory exists
-if (!existsSync(DIST_DIR)) {
-  mkdirSync(DIST_DIR, { recursive: true });
-}
-
-// Phase 2: Bundle with Bun
-console.log("Phase 2: Bundling with Bun...");
-const buildResult = await Bun.build({
-  entrypoints: [join(SDK_DIR, "src/index.ts")],
-  outdir: DIST_DIR,
-  target: "bun",
 });
-
-if (!buildResult.success) {
-  console.error("Build failed:");
-  for (const log of buildResult.logs) {
-    console.error(log);
-  }
-  process.exit(1);
-}
-
-// Phase 3: Generate bundled type declarations
-// Uses dts-bundle-generator to produce a single dist/index.d.ts with all types
-// inlined — no @plannotator/* package specifiers that external consumers can't resolve.
-// stderr warnings (bun-types conflicts) are expected and safe to ignore; the tool
-// still produces correct output.
-console.log("Phase 3: Generating bundled type declarations...");
-const entryPoint = join(SDK_DIR, "src/index.ts");
-const tsconfigPath = join(SDK_DIR, "tsconfig.build.json");
-const dtsOutput = join(DIST_DIR, "index.d.ts");
-const dtsResult =
-  await $`bunx dts-bundle-generator --project ${tsconfigPath} -o ${dtsOutput} ${entryPoint}`.quiet().nothrow();
-
-if (!existsSync(dtsOutput)) {
-  console.error("dts-bundle-generator failed to produce output");
-  console.error(dtsResult.stderr.toString());
-  process.exit(1);
-}
-
-if (dtsResult.exitCode !== 0) {
-  console.warn("dts-bundle-generator exited with warnings (output produced successfully)");
-}
-
-// Phase 4: Copy HTML files to dist
-console.log("Phase 4: Copying HTML files...");
-copyFileSync(PLAN_HTML, join(DIST_DIR, "plannotator.html"));
-copyFileSync(REVIEW_HTML, join(DIST_DIR, "review-editor.html"));
-
-console.log("SDK build complete.");
