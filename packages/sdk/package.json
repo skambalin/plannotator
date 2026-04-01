@@ -23,8 +23,9 @@
     "dist/"
   ],
   "scripts": {
+    "clean": "rm -rf package dist",
     "build": "bun run build.ts",
-    "package": "bun run build && clean-publish",
+    "package": "bun run clean && bun run build && clean-publish",
     "typecheck": "bunx tsc --noEmit"
   },
   "peerDependencies": {
