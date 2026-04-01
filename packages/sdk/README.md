@@ -169,21 +169,6 @@ const planHtml = getPlanHtml(); // Full plan review HTML string
 const reviewHtml = getReviewHtml(); // Full code review HTML string
 ```
 
-### SDK Types
-
-The `SDKClient` interface defines the contract for external plugins to communicate with the host agent.
-
-```ts
-import type { SDKClient } from "@plannotator/sdk";
-
-// All members are optional — provide what your plugin needs
-const client: SDKClient = {
-  send: async (message) => {
-    // Forward message back to the coding session
-  },
-};
-```
-
 ## License
 
 [MIT OR Apache-2.0](https://github.com/backnotprop/plannotator/blob/main/LICENSE)
