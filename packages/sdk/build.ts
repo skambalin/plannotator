@@ -11,6 +11,34 @@ const DIST_DIR = join(SDK_DIR, "dist");
 const PLAN_HTML = join(ROOT, "apps/hook/dist/index.html");
 const REVIEW_HTML = join(ROOT, "apps/hook/dist/review.html");
 
+async function runBuild(label: string, appDir: string): Promise<void> {
+  const proc = Bun.spawn(["bun", "run", "--cwd", appDir, "build"], {
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  if (exitCode !== 0) {
+    throw new Error(`${label} build failed (exit ${exitCode}):\n${stderr}`);
+  }
+}
+
+const buildReviewApp: ListrTask = {
+  title: "Build Review App",
+  task: () => runBuild("Review app", "apps/review"),
+};
+
+const buildHookApp: ListrTask = {
+  title: "Build Hook App",
+  task: () => runBuild("Hook app", "apps/hook"),
+};
+
 const validatePrerequisites: ListrTask = {
   title: "Validate HTML prerequisites",
   task: () => {
@@ -20,7 +48,7 @@ const validatePrerequisites: ListrTask = {
 
     if (missing.length > 0) {
       throw new Error(
-        `Missing HTML prerequisites:\n${missing.map((p) => `  - ${p}`).join("\n")}\n\nRun 'bun run build:hook' first.`,
+        `Missing HTML prerequisites (preceding build steps may have failed):\n${missing.map((p) => `  - ${p}`).join("\n")}`,
       );
     }
   },
@@ -89,6 +117,8 @@ const copyHtmlFiles: ListrTask = {
 };
 
 const listr = new Listr([
+  buildReviewApp,
+  buildHookApp,
   validatePrerequisites,
   ensureDistDir,
   bundleWithBun,

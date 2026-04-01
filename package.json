@@ -28,6 +28,7 @@
     "build:opencode": "bun run --cwd apps/opencode-plugin build",
     "build:review": "bun run --cwd apps/review build",
     "build:pi": "bun run build:review && bun run build:hook && bun run --cwd apps/pi-extension build",
+    "build:sdk": "bun run --cwd packages/sdk build",
     "build": "bun run build:hook && bun run build:opencode",
     "dev:vscode": "bun run --cwd apps/vscode-extension watch",
     "build:vscode": "bun run --cwd apps/vscode-extension build",
