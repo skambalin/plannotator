@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { resolve, join } from "node:path";
-import { existsSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { Listr, type ListrTask } from "listr2";
 
 const ROOT = resolve(import.meta.dir, "../..");
@@ -63,6 +63,27 @@ const ensureDistDir: ListrTask = {
   },
 };
 
+const syncVersion: ListrTask = {
+  title: "Sync version from root package.json",
+  task: (ctx, task) => {
+    const rootPkgPath = join(ROOT, "package.json");
+    const sdkPkgPath = join(SDK_DIR, "package.json");
+
+    const rootPkg = JSON.parse(readFileSync(rootPkgPath, "utf-8"));
+    const sdkPkg = JSON.parse(readFileSync(sdkPkgPath, "utf-8"));
+
+    if (sdkPkg.version === rootPkg.version) {
+      task.output = `Already in sync (${sdkPkg.version})`;
+      return;
+    }
+
+    const previousVersion = sdkPkg.version;
+    sdkPkg.version = rootPkg.version;
+    writeFileSync(sdkPkgPath, JSON.stringify(sdkPkg, null, 2) + "\n");
+    task.output = `${previousVersion} → ${rootPkg.version}`;
+  },
+};
+
 const bundleWithBun: ListrTask = {
   title: "Bundle with Bun",
   task: async () => {
@@ -116,14 +137,29 @@ const copyHtmlFiles: ListrTask = {
   },
 };
 
+const runCleanPublish: ListrTask = {
+  title: "Package with clean-publish",
+  task: async () => {
+    const result = await $`bunx clean-publish`.cwd(SDK_DIR).quiet().nothrow();
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `clean-publish failed (exit ${result.exitCode}):\n${result.stderr.toString()}`,
+      );
+    }
+  },
+};
+
 const listr = new Listr([
   buildReviewApp,
   buildHookApp,
   validatePrerequisites,
   ensureDistDir,
+  syncVersion,
   bundleWithBun,
   generateTypes,
   copyHtmlFiles,
+  runCleanPublish,
 ]);
 
 await listr.run().catch(() => {

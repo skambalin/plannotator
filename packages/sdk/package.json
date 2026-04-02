@@ -1,6 +1,6 @@
 {
   "name": "@plannotator/sdk",
-  "version": "0.16.2",
+  "version": "0.16.4",
   "private": false,
   "type": "module",
   "description": "Plannotator SDK — server-side capabilities for external plugin projects",
@@ -24,8 +24,7 @@
   ],
   "scripts": {
     "clean": "rm -rf package dist",
-    "build": "bun run build.ts",
-    "package": "bun run clean && bun run build && clean-publish",
+    "build": "bun run clean && bun run build.ts",
     "typecheck": "bunx tsc --noEmit"
   },
   "peerDependencies": {
