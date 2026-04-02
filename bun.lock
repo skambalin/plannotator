@@ -63,7 +63,7 @@
     },
     "apps/opencode-plugin": {
       "name": "@plannotator/opencode",
-      "version": "0.16.2",
+      "version": "0.16.4",
       "dependencies": {
         "@opencode-ai/plugin": "^1.1.10",
       },
@@ -85,7 +85,7 @@
     },
     "apps/pi-extension": {
       "name": "@plannotator/pi-extension",
-      "version": "0.16.2",
+      "version": "0.16.4",
       "peerDependencies": {
         "@mariozechner/pi-coding-agent": ">=0.53.0",
       },
@@ -186,7 +186,7 @@
     },
     "packages/server": {
       "name": "@plannotator/server",
-      "version": "0.16.2",
+      "version": "0.16.4",
       "dependencies": {
         "@plannotator/ai": "workspace:*",
         "@plannotator/shared": "workspace:*",
