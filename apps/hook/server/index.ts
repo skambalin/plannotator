@@ -63,7 +63,7 @@ import {
   startAnnotateServer,
   handleAnnotateServerReady,
 } from "@plannotator/server/annotate";
-import { getGitContext, runGitDiff } from "@plannotator/server/git";
+import { type DiffType, getVcsContext, runVcsDiff } from "@plannotator/server/vcs";
 import { parsePRUrl, checkPRAuth, fetchPR, getCliName, getCliInstallUrl, getMRLabel, getMRNumberLabel, getDisplayRepo } from "@plannotator/server/pr";
 import { writeRemoteShareLink } from "@plannotator/server/share-url";
 import { resolveMarkdownFile, hasMarkdownFiles } from "@plannotator/shared/resolve-file";
@@ -190,8 +190,9 @@ if (args[0] === "sessions") {
   let rawPatch: string;
   let gitRef: string;
   let diffError: string | undefined;
-  let gitContext: Awaited<ReturnType<typeof getGitContext>> | undefined;
+  let gitContext: Awaited<ReturnType<typeof getVcsContext>> | undefined;
   let prMetadata: Awaited<ReturnType<typeof fetchPR>>["metadata"] | undefined;
+  let initialDiffType: DiffType | undefined;
 
   if (isPRMode) {
     // --- PR Review Mode ---
@@ -232,8 +233,9 @@ if (args[0] === "sessions") {
     }
   } else {
     // --- Local Review Mode ---
-    gitContext = await getGitContext();
-    const diffResult = await runGitDiff("uncommitted", gitContext.defaultBranch);
+    gitContext = await getVcsContext();
+    initialDiffType = gitContext.vcsType === "p4" ? "p4-default" : "uncommitted";
+    const diffResult = await runVcsDiff(initialDiffType, gitContext.defaultBranch);
     rawPatch = diffResult.patch;
     gitRef = diffResult.label;
     diffError = diffResult.error;
@@ -247,7 +249,7 @@ if (args[0] === "sessions") {
     gitRef,
     error: diffError,
     origin: detectedOrigin,
-    diffType: isPRMode ? undefined : "uncommitted",
+    diffType: isPRMode ? undefined : (initialDiffType ?? "uncommitted"),
     gitContext,
     prMetadata,
     sharingEnabled,
@@ -747,12 +749,30 @@ if (args[0] === "sessions") {
 
   let planContent = "";
   let permissionMode = "default";
+  let isGemini = false;
+  let planFilename = "";
+  let event: Record<string, any>;
   try {
-    const event = JSON.parse(eventJson);
-    planContent = event.tool_input?.plan || "";
+    event = JSON.parse(eventJson);
+
+    // Detect harness: Gemini sends plan_filename (file on disk), Claude Code sends plan (inline)
+    planFilename = event.tool_input?.plan_filename || event.tool_input?.plan_path || "";
+    isGemini = !!planFilename;
+
+    if (isGemini) {
+      // Reconstruct full plan path from transcript_path and session_id:
+      // transcript_path = <projectTempDir>/chats/session-...json
+      // plan lives at   = <projectTempDir>/<session_id>/plans/<plan_filename>
+      const projectTempDir = path.dirname(path.dirname(event.transcript_path));
+      const planFilePath = path.join(projectTempDir, event.session_id, "plans", planFilename);
+      planContent = await Bun.file(planFilePath).text();
+    } else {
+      planContent = event.tool_input?.plan || "";
+    }
+
     permissionMode = event.permission_mode || "default";
-  } catch {
-    console.error("Failed to parse hook event from stdin");
+  } catch (e: any) {
+    console.error(`Failed to parse hook event from stdin: ${e?.message || e}`);
     process.exit(1);
   }
 
@@ -766,7 +786,7 @@ if (args[0] === "sessions") {
   // Start the plan review server
   const server = await startPlannotatorServer({
     plan: planContent,
-    origin: detectedOrigin,
+    origin: isGemini ? "gemini-cli" : detectedOrigin,
     permissionMode,
     sharingEnabled,
     shareBaseUrl,
@@ -800,41 +820,56 @@ if (args[0] === "sessions") {
   // Cleanup
   server.stop();
 
-  // Output JSON for PermissionRequest hook decision control
-  if (result.approved) {
-    // Build updatedPermissions to preserve the current permission mode
-    const updatedPermissions = [];
-    if (result.permissionMode) {
-      updatedPermissions.push({
-        type: "setMode",
-        mode: result.permissionMode,
-        destination: "session",
-      });
+  // Output decision in the appropriate format for the harness
+  if (isGemini) {
+    if (result.approved) {
+      console.log(result.feedback ? JSON.stringify({ systemMessage: result.feedback }) : "{}");
+    } else {
+      console.log(
+        JSON.stringify({
+          decision: "deny",
+          reason: planDenyFeedback(result.feedback || "", "exit_plan_mode", {
+            planFilePath: planFilename,
+          }),
+        })
+      );
     }
-
-    console.log(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: {
-            behavior: "allow",
-            ...(updatedPermissions.length > 0 && { updatedPermissions }),
-          },
-        },
-      })
-    );
   } else {
-    console.log(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: {
-            behavior: "deny",
-            message: planDenyFeedback(result.feedback || "", "ExitPlanMode"),
+    // Claude Code: PermissionRequest hook decision
+    if (result.approved) {
+      const updatedPermissions = [];
+      if (result.permissionMode) {
+        updatedPermissions.push({
+          type: "setMode",
+          mode: result.permissionMode,
+          destination: "session",
+        });
+      }
+
+      console.log(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: {
+              behavior: "allow",
+              ...(updatedPermissions.length > 0 && { updatedPermissions }),
+            },
           },
-        },
-      })
-    );
+        })
+      );
+    } else {
+      console.log(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: {
+              behavior: "deny",
+              message: planDenyFeedback(result.feedback || "", "ExitPlanMode"),
+            },
+          },
+        })
+      );
+    }
   }
 
   process.exit(0);

@@ -545,7 +545,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
           </div>
         </div>
 
-      {toolbar.toolbarState && (
+      {toolbar.toolbarState && !toolbar.showCodeModal && (
         <AnnotationToolbar
           toolbarState={toolbar.toolbarState}
           toolbarRef={toolbar.toolbarRef}
@@ -555,6 +555,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
           setSuggestedCode={toolbar.setSuggestedCode}
           showSuggestedCode={toolbar.showSuggestedCode}
           setShowSuggestedCode={toolbar.setShowSuggestedCode}
+          selectedOriginalCode={toolbar.selectedOriginalCode}
           setShowCodeModal={toolbar.setShowCodeModal}
           isEditing={!!toolbar.editingAnnotationId}
           onSubmit={toolbar.handleSubmitAnnotation}
