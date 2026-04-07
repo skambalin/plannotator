@@ -72,7 +72,7 @@ export interface VcsProvider {
 
 // --- Git provider ---
 
-const GIT_DIFF_TYPES = new Set(["uncommitted", "staged", "unstaged", "last-commit", "branch"]);
+const GIT_DIFF_TYPES = new Set(["uncommitted", "staged", "unstaged", "last-commit", "branch", "merge-base"]);
 
 const gitProvider: VcsProvider = {
   id: "git",
@@ -151,7 +151,7 @@ export type {
   WorktreeInfo,
 } from "./git";
 
-export { parseWorktreeDiffType, validateFilePath } from "./git";
+export { parseWorktreeDiffType, validateFilePath, runtime as gitRuntime } from "./git";
 
 // --- Detection cache ---
 
