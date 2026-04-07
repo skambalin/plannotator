@@ -1,6 +1,6 @@
 {
   "name": "@plannotator/sdk",
-  "version": "0.16.4",
+  "version": "0.16.7",
   "private": false,
   "type": "module",
   "description": "Plannotator SDK — server-side capabilities for external plugin projects",
