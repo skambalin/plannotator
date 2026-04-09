@@ -18,7 +18,7 @@ import { getAgentSwitchSettings, getEffectiveAgentName } from '@plannotator/ui/u
 import { getAIProviderSettings, saveAIProviderSettings, getPreferredModel } from '@plannotator/ui/utils/aiProvider';
 import { AISetupDialog } from '@plannotator/ui/components/AISetupDialog';
 import { needsAISetup } from '@plannotator/ui/utils/aiSetup';
-import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, TokenAnnotationMeta } from '@plannotator/ui/types';
+import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration } from '@plannotator/ui/types';
 import { useResizablePanel } from '@plannotator/ui/hooks/useResizablePanel';
 import { useCodeAnnotationDraft } from '@plannotator/ui/hooks/useCodeAnnotationDraft';
 import { useGitAdd } from './hooks/useGitAdd';
@@ -36,7 +36,7 @@ import { ReviewHeaderMenu } from './components/ReviewHeaderMenu';
 import { ReviewSidebar } from './components/ReviewSidebar';
 import { FileTree } from './components/FileTree';
 import { DEMO_DIFF } from './demoData';
-import { exportReviewFeedback } from './utils/exportFeedback';
+import { exportReviewFeedback, formatConventionalPrefix } from './utils/exportFeedback';
 import { ReviewStateProvider, type ReviewState } from './dock/ReviewStateContext';
 import { JobLogsProvider } from './dock/JobLogsContext';
 import { reviewPanelComponents } from './dock/reviewPanelComponents';
@@ -688,6 +688,8 @@ const ReviewApp: React.FC = () => {
     text?: string,
     suggestedCode?: string,
     originalCode?: string,
+    conventionalLabel?: ConventionalLabel,
+    decorations?: ConventionalDecoration[],
     tokenMeta?: TokenAnnotationMeta
   ) => {
     if (!pendingSelection || !files[activeFileIndex]) return;
@@ -714,6 +716,8 @@ const ReviewApp: React.FC = () => {
       }),
       createdAt: Date.now(),
       author: identity,
+      conventionalLabel,
+      decorations,
     };
 
     setAnnotations(prev => [...prev, newAnnotation]);
@@ -746,13 +750,18 @@ const ReviewApp: React.FC = () => {
     id: string,
     text?: string,
     suggestedCode?: string,
-    originalCode?: string
+    originalCode?: string,
+    conventionalLabel?: ConventionalLabel | null,
+    decorations?: ConventionalDecoration[],
   ) => {
     const ann = allAnnotationsRef.current.find(a => a.id === id);
-    const updates = {
+    const updates: Partial<CodeAnnotation> = {
       ...(text !== undefined && { text }),
       ...(suggestedCode !== undefined && { suggestedCode }),
       ...(originalCode !== undefined && { originalCode }),
+      // null clears the label; undefined means "not provided, keep existing"
+      ...(conventionalLabel !== undefined && { conventionalLabel: conventionalLabel ?? undefined }),
+      ...(decorations !== undefined && { decorations }),
     };
     if (ann?.source && externalAnnotations.some(e => e.id === id)) {
       updateExternalAnnotation(id, updates);
@@ -1124,7 +1133,8 @@ const ReviewApp: React.FC = () => {
 
     // Inline file comments
     const fileComments = fileAnnotations.map(ann => {
-      let commentBody = ann.text ?? '';
+      const ccPrefix = formatConventionalPrefix(ann.conventionalLabel, ann.decorations);
+      let commentBody = ccPrefix + (ann.text ?? '');
       if (ann.suggestedCode) {
         commentBody += `\n\n\`\`\`suggestion\n${ann.suggestedCode}\n\`\`\``;
       }

@@ -1,13 +1,17 @@
 import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
 import { FileDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
 import { getSingularPatch, processFile } from '@pierre/diffs';
-import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, DiffAnnotationMetadata, TokenAnnotationMeta } from '@plannotator/ui/types';
+import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, DiffAnnotationMetadata, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration } from '@plannotator/ui/types';
 import type { DiffTokenEventBaseProps } from '@pierre/diffs';
 import { useTheme } from '@plannotator/ui/components/ThemeProvider';
 import { CommentPopover } from '@plannotator/ui/components/CommentPopover';
 import { storage } from '@plannotator/ui/utils/storage';
 import { detectLanguage } from '../utils/detectLanguage';
 import { useAnnotationToolbar } from '../hooks/useAnnotationToolbar';
+import { useConfigValue } from '@plannotator/ui/config';
+import { OverlayScrollArea } from '@plannotator/ui/components/OverlayScrollArea';
+import { useOverlayViewport } from '@plannotator/ui/hooks/useOverlayViewport';
+import { getEnabledLabels } from './ConventionalLabelPicker';
 import { FileHeader } from './FileHeader';
 import { InlineAnnotation } from './InlineAnnotation';
 import { InlineAIMarker } from './InlineAIMarker';
@@ -127,9 +131,9 @@ interface DiffViewerProps {
   selectedAnnotationId: string | null;
   pendingSelection: SelectedLineRange | null;
   onLineSelection: (range: SelectedLineRange | null) => void;
-  onAddAnnotation: (type: CodeAnnotationType, text?: string, suggestedCode?: string, originalCode?: string, tokenMeta?: TokenAnnotationMeta) => void;
+  onAddAnnotation: (type: CodeAnnotationType, text?: string, suggestedCode?: string, originalCode?: string, conventionalLabel?: ConventionalLabel, decorations?: ConventionalDecoration[], tokenMeta?: TokenAnnotationMeta) => void;
   onAddFileComment: (text: string) => void;
-  onEditAnnotation: (id: string, text?: string, suggestedCode?: string, originalCode?: string) => void;
+  onEditAnnotation: (id: string, text?: string, suggestedCode?: string, originalCode?: string, conventionalLabel?: ConventionalLabel | null, decorations?: ConventionalDecoration[]) => void;
   onSelectAnnotation: (id: string | null) => void;
   onDeleteAnnotation: (id: string) => void;
   isViewed?: boolean;
@@ -196,7 +200,11 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   aiHistoryMessages = [],
 }) => {
   const { theme, colorTheme, resolvedMode } = useTheme();
-  const containerRef = useRef<HTMLDivElement>(null);
+  // containerRef must point at the actual scrolling element (the
+  // OverlayScrollbars viewport), not the OverlayScrollArea host. `viewport`
+  // is state so effects re-run once the library has mounted the viewport.
+  const { ref: containerRef, viewport, onViewportReady } =
+    useOverlayViewport<HTMLDivElement>();
   const splitSurfaceRef = useRef<HTMLDivElement>(null);
   const [fileCommentAnchor, setFileCommentAnchor] = useState<HTMLElement | null>(null);
 
@@ -252,6 +260,9 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   }, []);
 
   const toolbar = useAnnotationToolbar({ patch, filePath, isFocused, onLineSelection, onAddAnnotation, onEditAnnotation });
+  const conventionalCommentsEnabled = useConfigValue('conventionalComments');
+  const conventionalLabelsJson = useConfigValue('conventionalLabels');
+  const enabledLabels = useMemo(() => getEnabledLabels(conventionalLabelsJson), [conventionalLabelsJson]);
 
   // Parse patch into FileDiffMetadata for @pierre/diffs FileDiff component
   const fileDiff = useMemo(() => getSingularPatch(patch), [patch]);
@@ -293,12 +304,15 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
 
   const previousScrollFilePathRef = useRef(filePath);
   useLayoutEffect(() => {
-    if (previousScrollFilePathRef.current !== filePath) {
-      // A new file should start from the top-left of the diff viewport.
-      containerRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-      previousScrollFilePathRef.current = filePath;
-    }
-  }, [filePath]);
+    if (previousScrollFilePathRef.current === filePath) return;
+    // A new file should start from the top-left of the diff viewport.
+    // Only advance the tracking ref once the scroll actually executed —
+    // otherwise a file switch landing before the OverlayScrollbars viewport
+    // has attached would leave the viewport stale on old content.
+    if (!containerRef.current) return;
+    containerRef.current.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    previousScrollFilePathRef.current = filePath;
+  }, [filePath, viewport]);
 
   // Clear pending selection when file changes
   const prevFilePathRef = useRef(filePath);
@@ -323,7 +337,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     }, 100);
 
     return () => clearTimeout(timeoutId);
-  }, [selectedAnnotationId]);
+  }, [selectedAnnotationId, viewport]);
 
   // Apply search highlights to diff lines (including inside shadow DOM).
   // The query is already debounced upstream (useReviewSearch), so this runs synchronously.
@@ -344,20 +358,20 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     roots.forEach(root =>
       applySearchHighlights(root, query, matches, activeSearchMatchId)
     );
-  }, [searchQuery, searchMatches, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, augmentedDiff]);
+  }, [searchQuery, searchMatches, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, augmentedDiff, viewport]);
 
   // Swap active search highlight instantly when stepping between matches.
   // This avoids a full rebuild just to change two elements' background color.
   useEffect(() => {
     if (!containerRef.current) return;
     swapActiveSearchHighlight(containerRef.current, activeSearchMatchId);
-  }, [activeSearchMatchId]);
+  }, [activeSearchMatchId, viewport]);
 
   // Scroll to active search match (with retry for lazy-rendered content)
   useEffect(() => {
     if (!activeSearchMatch || !containerRef.current) return;
     return retryScrollToSearchMatch(containerRef.current, activeSearchMatch);
-  }, [activeSearchMatch, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground]);
+  }, [activeSearchMatch, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, viewport]);
 
   // Map annotations to @pierre/diffs format
   const lineAnnotations = useMemo(() => {
@@ -375,6 +389,8 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
           author: ann.author,
           severity: ann.severity,
           reasoning: ann.reasoning,
+          conventionalLabel: ann.conventionalLabel,
+          decorations: ann.decorations,
         } as DiffAnnotationMetadata,
       }));
   }, [annotations]);
@@ -567,7 +583,12 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         onFileComment={setFileCommentAnchor}
       />
 
-      <div ref={containerRef} className={`flex-1 overflow-auto relative ${isDraggingSplit ? 'select-none' : ''}`} onMouseMove={toolbar.handleMouseMove}>
+      <OverlayScrollArea
+        className={`flex-1 min-h-0 relative ${isDraggingSplit ? 'select-none' : ''}`}
+        overflowX="scroll"
+        onViewportReady={onViewportReady}
+        onMouseMove={toolbar.handleMouseMove}
+      >
         <div className="p-4">
           <div ref={splitSurfaceRef} className="relative min-w-0" style={splitGridStyle}>
             {isSplitLayout && diffOverflow !== 'wrap' && (
@@ -618,6 +639,12 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
           onSubmit={toolbar.handleSubmitAnnotation}
           onDismiss={toolbar.handleDismiss}
           onCancel={toolbar.handleCancel}
+          conventionalCommentsEnabled={conventionalCommentsEnabled}
+          conventionalLabel={toolbar.conventionalLabel}
+          onConventionalLabelChange={toolbar.setConventionalLabel}
+          decorations={toolbar.decorations}
+          onDecorationsChange={toolbar.setDecorations}
+          enabledLabels={enabledLabels}
           aiAvailable={aiAvailable}
           onAskAI={onAskAI}
           isAILoading={isAILoading}
@@ -651,7 +678,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
           onClose={() => setFileCommentAnchor(null)}
         />
       )}
-      </div>
+      </OverlayScrollArea>
     </div>
   );
 };

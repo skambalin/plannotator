@@ -15,7 +15,7 @@ import { isRemoteSession, getServerPort } from "./remote";
 import { getRepoInfo } from "./repo";
 import type { Origin } from "@plannotator/shared/agents";
 import { handleImage, handleUpload, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleFavicon } from "./shared-handlers";
-import { handleDoc, handleFileBrowserFiles } from "./reference-handlers";
+import { handleDoc, handleFileBrowserFiles, handleObsidianVaults, handleObsidianFiles, handleObsidianDoc } from "./reference-handlers";
 import { contentHash, deleteDraft } from "./draft";
 import { createExternalAnnotationHandler } from "./external-annotations";
 import { saveConfig, detectGitUser, getServerConfig } from "./config";
@@ -150,10 +150,12 @@ export async function startAnnotateServer(
           // API: Update user config (write-back to ~/.plannotator/config.json)
           if (url.pathname === "/api/config" && req.method === "POST") {
             try {
-              const body = (await req.json()) as { displayName?: string; diffOptions?: Record<string, unknown> };
+              const body = (await req.json()) as { displayName?: string; diffOptions?: Record<string, unknown>; conventionalComments?: boolean; conventionalLabels?: unknown[] | null };
               const toSave: Record<string, unknown> = {};
               if (body.displayName !== undefined) toSave.displayName = body.displayName;
               if (body.diffOptions !== undefined) toSave.diffOptions = body.diffOptions;
+              if (body.conventionalComments !== undefined) toSave.conventionalComments = body.conventionalComments;
+              if (body.conventionalLabels !== undefined) toSave.conventionalLabels = body.conventionalLabels;
               if (Object.keys(toSave).length > 0) saveConfig(toSave as Parameters<typeof saveConfig>[0]);
               return Response.json({ ok: true });
             } catch {
@@ -175,6 +177,21 @@ export async function startAnnotateServer(
               return handleDoc(new Request(docUrl.toString()));
             }
             return handleDoc(req);
+          }
+
+          // API: Detect Obsidian vaults
+          if (url.pathname === "/api/obsidian/vaults") {
+            return handleObsidianVaults();
+          }
+
+          // API: List Obsidian vault files as a tree
+          if (url.pathname === "/api/reference/obsidian/files" && req.method === "GET") {
+            return handleObsidianFiles(req);
+          }
+
+          // API: Read an Obsidian vault document
+          if (url.pathname === "/api/reference/obsidian/doc" && req.method === "GET") {
+            return handleObsidianDoc(req);
           }
 
           // API: List markdown files in a directory as a tree
