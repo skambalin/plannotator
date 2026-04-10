@@ -90,6 +90,7 @@ export interface ReviewServerResult {
     feedback: string;
     annotations: unknown[];
     agentSwitch?: string;
+    exit?: boolean;
   }>;
   /** Stop the server */
   stop: () => void;
@@ -329,12 +330,14 @@ export async function startReviewServer(
     feedback: string;
     annotations: unknown[];
     agentSwitch?: string;
+    exit?: boolean;
   }) => void;
   const decisionPromise = new Promise<{
     approved: boolean;
     feedback: string;
     annotations: unknown[];
     agentSwitch?: string;
+    exit?: boolean;
   }>((resolve) => {
     resolveDecision = resolve;
   });
@@ -560,6 +563,13 @@ export async function startReviewServer(
           });
           if (agentResponse) return agentResponse;
 
+          // API: Exit review session without feedback
+          if (url.pathname === "/api/exit" && req.method === "POST") {
+            deleteDraft(draftKey);
+            resolveDecision({ approved: false, feedback: "", annotations: [], exit: true });
+            return Response.json({ ok: true });
+          }
+
           // API: Submit review feedback
           if (url.pathname === "/api/feedback" && req.method === "POST") {
             try {
@@ -659,6 +669,14 @@ export async function startReviewServer(
           return new Response(htmlContent, {
             headers: { "Content-Type": "text/html" },
           });
+        },
+
+        error(err) {
+          console.error("[plannotator] Server error:", err);
+          return new Response(
+            `Internal Server Error: ${err instanceof Error ? err.message : String(err)}`,
+            { status: 500, headers: { "Content-Type": "text/plain" } },
+          );
         },
       });
 
