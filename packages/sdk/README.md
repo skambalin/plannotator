@@ -143,10 +143,26 @@ Resolve and validate markdown file paths for the annotate flow.
 ```ts
 import {
   resolveMarkdownFile,
-  normalizeMarkdownPathInput,
-  isAbsoluteMarkdownPath,
   hasMarkdownFiles,
+  normalizeUserPathInput,
+  isAbsoluteUserPath,
+  expandHomePath,
+  resolveUserPath,
+  isWithinProjectRoot,
   type ResolveResult,
+} from "@plannotator/sdk";
+```
+
+### Markdown Conversion
+
+Convert URLs (via Jina Reader with fetch+Turndown fallback) and raw HTML to clean markdown — same pipeline used by the `plannotator annotate` flow.
+
+```ts
+import {
+  urlToMarkdown,
+  htmlToMarkdown,
+  type UrlToMarkdownOptions,
+  type UrlToMarkdownResult,
 } from "@plannotator/sdk";
 ```
 

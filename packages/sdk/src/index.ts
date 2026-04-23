@@ -7,4 +7,5 @@ export * from './remote';
 export * from './browser';
 export * from './files';
 export * from './feedback';
+export * from './markdown';
 export * from './html';
