@@ -19,6 +19,8 @@ import { getAgentSwitchSettings, getEffectiveAgentName } from '@plannotator/ui/u
 import { getAIProviderSettings, saveAIProviderSettings, getPreferredModel } from '@plannotator/ui/utils/aiProvider';
 import { AISetupDialog } from '@plannotator/ui/components/AISetupDialog';
 import { needsAISetup } from '@plannotator/ui/utils/aiSetup';
+import { DiffTypeSetupDialog } from '@plannotator/ui/components/DiffTypeSetupDialog';
+import { needsDiffTypeSetup } from '@plannotator/ui/utils/diffTypeSetup';
 import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration } from '@plannotator/ui/types';
 import { useResizablePanel } from '@plannotator/ui/hooks/useResizablePanel';
 import { useCodeAnnotationDraft } from '@plannotator/ui/hooks/useCodeAnnotationDraft';
@@ -57,6 +59,8 @@ import type { DiffFile } from './types';
 import type { DiffOption, WorktreeInfo, GitContext } from '@plannotator/shared/types';
 import type { PRMetadata } from '@plannotator/shared/pr-provider';
 import { altKey } from '@plannotator/ui/utils/platform';
+import { TourDialog } from './components/tour/TourDialog';
+import { DEMO_TOUR_ID } from './demoTour';
 
 declare const __APP_VERSION__: string;
 
@@ -222,6 +226,9 @@ const ReviewApp: React.FC = () => {
   const { externalAnnotations, updateExternalAnnotation, deleteExternalAnnotation } = useExternalAnnotations<CodeAnnotation>({ enabled: !!origin });
   const agentJobs = useAgentJobs({ enabled: !!origin });
 
+  // Tour dialog state — opens as an overlay instead of a dock panel
+  const [tourDialogJobId, setTourDialogJobId] = useState<string | null>(null);
+
   // Dockview center panel API for the review workspace.
   const [dockApi, setDockApi] = useState<DockviewApi | null>(null);
   const filesRef = useRef(files);
@@ -362,6 +369,9 @@ const ReviewApp: React.FC = () => {
     };
   });
   const [showAISetup, setShowAISetup] = useState(false);
+  const [aiCheckComplete, setAiCheckComplete] = useState(false);
+  const [showDiffTypeSetup, setShowDiffTypeSetup] = useState(false);
+  const [diffTypeSetupPending, setDiffTypeSetupPending] = useState(false);
   const [sidebarTabOverride, setSidebarTabOverride] = useState<'ai' | undefined>(undefined);
   const aiChat = useAIChat({
     patch: diffData?.rawPatch ?? '',
@@ -383,8 +393,9 @@ const ReviewApp: React.FC = () => {
             setShowAISetup(true);
           }
         }
+        setAiCheckComplete(true);
       })
-      .catch(() => {});
+      .catch(() => { setAiCheckComplete(true); });
   }, []);
 
   const handleAIConfigChange = useCallback((config: { providerId?: string | null; model?: string | null }) => {
@@ -541,6 +552,39 @@ const ReviewApp: React.FC = () => {
     });
   }, [dockApi, agentJobs.jobs]);
 
+  // Open tour as a dialog overlay
+  const handleOpenTour = useCallback((jobId: string) => {
+    setTourDialogJobId(jobId);
+  }, []);
+
+  // Dev-only: Cmd/Ctrl+Shift+T toggles the demo tour for fast UI iteration.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'T' || e.key === 't')) {
+        e.preventDefault();
+        setTourDialogJobId(prev => (prev === DEMO_TOUR_ID ? null : DEMO_TOUR_ID));
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Auto-open tour dialog when a tour job completes
+  const tourAutoOpenRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const job of agentJobs.jobs) {
+      if (
+        job.provider === 'tour' &&
+        job.status === 'done' &&
+        !tourAutoOpenRef.current.has(job.id)
+      ) {
+        tourAutoOpenRef.current.add(job.id);
+        setTourDialogJobId(job.id);
+      }
+    }
+  }, [agentJobs.jobs]);
+
   // Open PR panel as center dock panel
   const handleOpenPRPanel = useCallback((type: 'summary' | 'comments' | 'checks') => {
     const api = dockApi;
@@ -662,6 +706,10 @@ const ReviewApp: React.FC = () => {
         }
         if (data.error) setDiffError(data.error);
         if (data.isWSL) setIsWSL(true);
+        // Mark diff type setup as pending on first run (local mode only)
+        if (data.diffType && !data.prMetadata && data.gitContext?.vcsType !== 'p4' && needsDiffTypeSetup()) {
+          setDiffTypeSetupPending(true);
+        }
       })
       .catch(() => {
         // Not in API mode - use demo content
@@ -675,6 +723,14 @@ const ReviewApp: React.FC = () => {
       })
       .finally(() => setIsLoading(false));
   }, []);
+
+  // Show diff type setup dialog only after AI setup dialog is dismissed (avoid stacking)
+  useEffect(() => {
+    if (diffTypeSetupPending && aiCheckComplete && !showAISetup) {
+      setDiffTypeSetupPending(false);
+      setShowDiffTypeSetup(true);
+    }
+  }, [diffTypeSetupPending, aiCheckComplete, showAISetup]);
 
   const handleDiffStyleChange = useCallback((style: 'split' | 'unified') => {
     configStore.set('diffStyle', style);
@@ -891,6 +947,7 @@ const ReviewApp: React.FC = () => {
       const nextFiles = parseDiffToFiles(data.rawPatch);
       dockApi?.getPanel(REVIEW_DIFF_PANEL_ID)?.api.close();
       needsInitialDiffPanel.current = true;
+      setDiffData(prev => prev ? { ...prev, rawPatch: data.rawPatch, gitRef: data.gitRef, diffType: data.diffType } : prev);
       setFiles(nextFiles);
       setDiffType(data.diffType);
       setActiveFileIndex(0);
@@ -997,6 +1054,7 @@ const ReviewApp: React.FC = () => {
     fetchPRContext,
     platformUser,
     openDiffFile,
+    openTourPanel: handleOpenTour,
   }), [
     files, activeFileIndex, diffStyle, diffOverflow, diffIndicators,
     diffLineDiffType, diffShowLineNumbers, diffShowBackground,
@@ -1011,6 +1069,7 @@ const ReviewApp: React.FC = () => {
     handleAskAI, handleViewAIResponse, handleClickAIMarker,
     aiHistoryForSelection, agentJobs.jobs, prMetadata, prContext,
     isPRContextLoading, prContextError, fetchPRContext, platformUser, openDiffFile,
+    handleOpenTour,
   ]);
 
   // Separate context for high-frequency job logs — prevents re-rendering all panels on every SSE event
@@ -1907,6 +1966,16 @@ const ReviewApp: React.FC = () => {
           }}
         />
 
+        {/* Diff type setup dialog — first-run only */}
+        {showDiffTypeSetup && (
+          <DiffTypeSetupDialog
+            onComplete={(selected) => {
+              setShowDiffTypeSetup(false);
+              if (selected !== diffType) handleDiffSwitch(selected);
+            }}
+          />
+        )}
+
         {/* Completion overlay - shown after approve/feedback/exit */}
         <CompletionOverlay
           submitted={submitted}
@@ -1991,6 +2060,22 @@ const ReviewApp: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Tour dialog overlay */}
+      <TourDialog jobId={tourDialogJobId} onClose={() => setTourDialogJobId(null)} />
+
+      {/* Dev-only: open a fully-formed demo tour without running the agent.
+          Stripped from production builds via import.meta.env.DEV. */}
+      {import.meta.env.DEV && (
+        <button
+          onClick={() => setTourDialogJobId(tourDialogJobId === DEMO_TOUR_ID ? null : DEMO_TOUR_ID)}
+          title="Open the demo tour (dev only). Cmd+Shift+T also works."
+          className="fixed bottom-3 right-3 z-[60] px-2.5 py-1 rounded-md bg-foreground/80 text-background text-[10px] font-mono uppercase tracking-wider shadow-lg hover:bg-foreground transition-colors"
+        >
+          {tourDialogJobId === DEMO_TOUR_ID ? 'Close tour' : 'Demo tour'}
+        </button>
+      )}
+
     </JobLogsProvider>
     </ReviewStateProvider>
     </ThemeProvider>

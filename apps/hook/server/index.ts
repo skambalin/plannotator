@@ -64,20 +64,31 @@ import {
   handleAnnotateServerReady,
 } from "@plannotator/server/annotate";
 import { type DiffType, getVcsContext, runVcsDiff, gitRuntime } from "@plannotator/server/vcs";
+import { loadConfig, resolveDefaultDiffType, resolveUseJina } from "@plannotator/shared/config";
+import { htmlToMarkdown } from "@plannotator/shared/html-to-markdown";
+import { urlToMarkdown } from "@plannotator/shared/url-to-markdown";
 import { fetchRef, createWorktree, removeWorktree, ensureObjectAvailable } from "@plannotator/shared/worktree";
 import { parsePRUrl, checkPRAuth, fetchPR, getCliName, getCliInstallUrl, getMRLabel, getMRNumberLabel, getDisplayRepo } from "@plannotator/server/pr";
 import { writeRemoteShareLink } from "@plannotator/server/share-url";
-import { resolveMarkdownFile, hasMarkdownFiles } from "@plannotator/shared/resolve-file";
+import { resolveMarkdownFile, resolveUserPath, hasMarkdownFiles } from "@plannotator/shared/resolve-file";
 import { FILE_BROWSER_EXCLUDED } from "@plannotator/shared/reference-common";
-import { statSync, rmSync, realpathSync } from "fs";
+import { statSync, rmSync, realpathSync, existsSync } from "fs";
 import { parseRemoteUrl } from "@plannotator/shared/repo";
 import { registerSession, unregisterSession, listSessions } from "@plannotator/server/sessions";
 import { openBrowser } from "@plannotator/server/browser";
 import { detectProjectName } from "@plannotator/server/project";
+import { hostnameOrFallback } from "@plannotator/shared/project";
 import { planDenyFeedback } from "@plannotator/shared/feedback-templates";
 import { readImprovementHook } from "@plannotator/shared/improvement-hooks";
-import type { Origin } from "@plannotator/shared/agents";
-import { findSessionLogsForCwd, resolveSessionLogByPpid, findSessionLogsByAncestorWalk, getLastRenderedMessage, type RenderedMessage } from "./session-log";
+import { AGENT_CONFIG, type Origin } from "@plannotator/shared/agents";
+import {
+  findSessionLogsByAncestorWalk,
+  findSessionLogsForCwd,
+  getLastRenderedMessage,
+  resolveSessionLogByAncestorPids,
+  resolveSessionLogByCwdScan,
+  type RenderedMessage,
+} from "./session-log";
 import { findCodexRolloutByThreadId, getLastCodexMessage } from "./codex-session";
 import { findCopilotPlanContent, findCopilotSessionForCwd, getLastCopilotMessage } from "./copilot-session";
 import {
@@ -108,6 +119,11 @@ if (browserIdx !== -1 && args[browserIdx + 1]) {
   args.splice(browserIdx, 2);
 }
 
+// Global flag: --no-jina (disables Jina Reader for URL annotation)
+const noJinaIdx = args.indexOf("--no-jina");
+const cliNoJina = noJinaIdx !== -1;
+if (cliNoJina) args.splice(noJinaIdx, 1);
+
 if (isTopLevelHelpInvocation(args)) {
   console.log(formatTopLevelHelp());
   process.exit(0);
@@ -131,10 +147,21 @@ const shareBaseUrl = process.env.PLANNOTATOR_SHARE_URL || undefined;
 const pasteApiUrl = process.env.PLANNOTATOR_PASTE_URL || undefined;
 
 // Detect calling agent from environment variables set by agent runtimes.
-// Priority: Codex > Copilot CLI > Claude Code (default fallback)
+// Priority:
+//   PLANNOTATOR_ORIGIN (explicit override, validated against AGENT_CONFIG)
+//   > Codex (CODEX_THREAD_ID)
+//   > Copilot CLI (COPILOT_CLI)
+//   > OpenCode (OPENCODE)
+//   > Claude Code (default fallback)
+//
+// To add a new agent, also add an entry to AGENT_CONFIG in
+// packages/shared/agents.ts (see header comment there).
+const originOverride = process.env.PLANNOTATOR_ORIGIN as Origin | undefined;
 const detectedOrigin: Origin =
+  (originOverride && originOverride in AGENT_CONFIG) ? originOverride :
   process.env.CODEX_THREAD_ID ? "codex" :
   process.env.COPILOT_CLI ? "copilot-cli" :
+  process.env.OPENCODE ? "opencode" :
   "claude-code";
 
 if (args[0] === "sessions") {
@@ -379,7 +406,7 @@ if (args[0] === "sessions") {
   } else {
     // --- Local Review Mode ---
     gitContext = await getVcsContext();
-    initialDiffType = gitContext.vcsType === "p4" ? "p4-default" : "uncommitted";
+    initialDiffType = gitContext.vcsType === "p4" ? "p4-default" : resolveDefaultDiffType(loadConfig());
     const diffResult = await runVcsDiff(initialDiffType, gitContext.defaultBranch);
     rawPatch = diffResult.patch;
     gitRef = diffResult.label;
@@ -394,7 +421,7 @@ if (args[0] === "sessions") {
     gitRef,
     error: diffError,
     origin: detectedOrigin,
-    diffType: gitContext ? (initialDiffType ?? "uncommitted") : undefined,
+    diffType: gitContext ? (initialDiffType ?? "unstaged") : undefined,
     gitContext,
     prMetadata,
     agentCwd,
@@ -450,7 +477,7 @@ if (args[0] === "sessions") {
 
   let filePath = args[1];
   if (!filePath) {
-    console.error("Usage: plannotator annotate <file.md | folder/>");
+    console.error("Usage: plannotator annotate <file.md | file.html | https://... | folder/>  [--no-jina]");
     process.exit(1);
   }
 
@@ -467,50 +494,87 @@ if (args[0] === "sessions") {
     console.error(`[DEBUG] File path arg: ${filePath}`);
   }
 
-  // Check if the argument is a directory (folder annotation mode)
-  const resolvedArg = path.resolve(projectRoot, filePath);
-  let isFolder = false;
-  try {
-    isFolder = statSync(resolvedArg).isDirectory();
-  } catch {
-    // Not a directory, fall through to file resolution
-  }
-
   let markdown: string;
   let absolutePath: string;
   let folderPath: string | undefined;
   let annotateMode: "annotate" | "annotate-folder" = "annotate";
+  let sourceInfo: string | undefined;
 
-  if (isFolder) {
-    // Folder annotation mode
-    if (!hasMarkdownFiles(resolvedArg, FILE_BROWSER_EXCLUDED)) {
-      console.error(`No markdown files found in ${resolvedArg}`);
-      process.exit(1);
-    }
-    folderPath = resolvedArg;
-    absolutePath = resolvedArg;
-    markdown = "";
-    annotateMode = "annotate-folder";
-    console.error(`Folder: ${resolvedArg}`);
-  } else {
-    // Single file annotation mode
-    const resolved = resolveMarkdownFile(filePath, projectRoot);
+  // --- URL annotation ---
+  const isUrl = /^https?:\/\//i.test(filePath);
 
-    if (resolved.kind === "ambiguous") {
-      console.error(`Ambiguous filename "${resolved.input}" — found ${resolved.matches.length} matches:`);
-      for (const match of resolved.matches) {
-        console.error(`  ${match}`);
+  if (isUrl) {
+    const useJina = resolveUseJina(cliNoJina, loadConfig());
+    console.error(`Fetching: ${filePath}${useJina ? " (via Jina Reader)" : " (via fetch+Turndown)"}`);
+    try {
+      const result = await urlToMarkdown(filePath, { useJina });
+      markdown = result.markdown;
+      if (process.env.PLANNOTATOR_DEBUG) {
+        console.error(`[DEBUG] Fetched via ${result.source} (${markdown.length} chars)`);
       }
+    } catch (err) {
+      console.error(`Failed to fetch URL: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
-    if (resolved.kind === "not_found") {
-      console.error(`File not found: ${resolved.input}`);
-      process.exit(1);
+    absolutePath = filePath; // Use URL as the "path" for display
+    sourceInfo = filePath;   // Full URL for source attribution
+  } else {
+    // Check if the argument is a directory (folder annotation mode)
+    const resolvedArg = resolveUserPath(filePath, projectRoot);
+    let isFolder = false;
+    try {
+      isFolder = statSync(resolvedArg).isDirectory();
+    } catch {
+      // Not a directory, fall through to file resolution
     }
 
-    absolutePath = resolved.path;
-    markdown = await Bun.file(absolutePath).text();
-    console.error(`Resolved: ${absolutePath}`);
+    if (isFolder) {
+      // Folder annotation mode (markdown + HTML files)
+      if (!hasMarkdownFiles(resolvedArg, FILE_BROWSER_EXCLUDED, /\.(mdx?|html?)$/i)) {
+        console.error(`No markdown or HTML files found in ${resolvedArg}`);
+        process.exit(1);
+      }
+      folderPath = resolvedArg;
+      absolutePath = resolvedArg;
+      markdown = "";
+      annotateMode = "annotate-folder";
+      console.error(`Folder: ${resolvedArg}`);
+    } else if (/\.html?$/i.test(resolvedArg)) {
+      // HTML file annotation mode — convert to markdown via Turndown
+      if (!existsSync(resolvedArg)) {
+        console.error(`File not found: ${filePath}`);
+        process.exit(1);
+      }
+      const htmlFile = Bun.file(resolvedArg);
+      if (htmlFile.size > 10 * 1024 * 1024) {
+        console.error(`File too large (${Math.round(htmlFile.size / 1024 / 1024)}MB, max 10MB): ${resolvedArg}`);
+        process.exit(1);
+      }
+      const html = await htmlFile.text();
+      markdown = htmlToMarkdown(html);
+      absolutePath = resolvedArg;
+      sourceInfo = path.basename(resolvedArg);
+      console.error(`Converted: ${absolutePath}`);
+    } else {
+      // Single markdown file annotation mode
+      const resolved = resolveMarkdownFile(filePath, projectRoot);
+
+      if (resolved.kind === "ambiguous") {
+        console.error(`Ambiguous filename "${resolved.input}" — found ${resolved.matches.length} matches:`);
+        for (const match of resolved.matches) {
+          console.error(`  ${match}`);
+        }
+        process.exit(1);
+      }
+      if (resolved.kind === "not_found") {
+        console.error(`File not found: ${resolved.input}`);
+        process.exit(1);
+      }
+
+      absolutePath = resolved.path;
+      markdown = await Bun.file(absolutePath).text();
+      console.error(`Resolved: ${absolutePath}`);
+    }
   }
 
   const annotateProject = (await detectProjectName()) ?? "_unknown";
@@ -522,6 +586,7 @@ if (args[0] === "sessions") {
     origin: detectedOrigin,
     mode: annotateMode,
     folderPath,
+    sourceInfo,
     sharingEnabled,
     shareBaseUrl,
     pasteApiUrl,
@@ -542,7 +607,9 @@ if (args[0] === "sessions") {
     mode: "annotate",
     project: annotateProject,
     startedAt: new Date().toISOString(),
-    label: folderPath ? `annotate-${path.basename(folderPath)}` : `annotate-${path.basename(absolutePath)}`,
+    label: folderPath
+      ? `annotate-${path.basename(folderPath)}`
+      : `annotate-${isUrl ? hostnameOrFallback(absolutePath) : path.basename(absolutePath)}`,
   });
 
   // Wait for user feedback
@@ -592,12 +659,18 @@ if (args[0] === "sessions") {
     // Claude Code path: resolve session log
     //
     // Strategy (most precise → least precise):
-    // 1. PPID session metadata: ~/.claude/sessions/<ppid>.json gives us the
-    //    exact sessionId and original cwd. Deterministic, O(1), no scanning.
-    // 2. CWD slug match: existing behavior — works when the shell CWD hasn't
-    //    changed from the session's project directory.
-    // 3. Ancestor walk: walk up the directory tree trying parent slugs. Handles
-    //    the common case where the user `cd`'d deeper into a subdirectory.
+    // 1. Ancestor-PID session metadata: walk up the process tree checking
+    //    ~/.claude/sessions/<pid>.json at each hop. When invoked from a slash
+    //    command's `!` bang, the direct parent is a bash subshell — Claude's
+    //    session file is a few hops up. Deterministic when it matches.
+    // 2. Cwd-scan of session metadata: read every ~/.claude/sessions/*.json,
+    //    filter by cwd, pick the most recent startedAt. Better than mtime
+    //    guessing because it uses session-level metadata.
+    // 3. CWD slug match (mtime-based): legacy behavior — picks the most
+    //    recently modified jsonl in the project dir. Fragile when multiple
+    //    sessions exist for the same project.
+    // 4. Ancestor directory walk: handles the case where the user `cd`'d
+    //    deeper into a subdirectory after session start.
 
     if (process.env.PLANNOTATOR_DEBUG) {
       console.error(`[DEBUG] Project root: ${projectRoot}`);
@@ -617,15 +690,19 @@ if (args[0] === "sessions") {
       }
     }
 
-    // 1. Try PPID-based session metadata (most reliable)
-    const ppidLog = resolveSessionLogByPpid();
-    tryLogCandidates("PPID session metadata", () => ppidLog ? [ppidLog] : []);
+    // 1. Walk ancestor PIDs for a matching session metadata file
+    const ancestorLog = resolveSessionLogByAncestorPids();
+    tryLogCandidates("Ancestor PID session metadata", () => ancestorLog ? [ancestorLog] : []);
 
-    // 2. Fall back to CWD slug match
-    tryLogCandidates("CWD slug match", () => findSessionLogsForCwd(projectRoot));
+    // 2. Scan all session metadata files for one whose cwd matches
+    const cwdScanLog = resolveSessionLogByCwdScan({ cwd: projectRoot });
+    tryLogCandidates("Cwd-scan session metadata", () => cwdScanLog ? [cwdScanLog] : []);
 
-    // 3. Fall back to ancestor directory walk
-    tryLogCandidates("Ancestor walk", () => findSessionLogsByAncestorWalk(projectRoot));
+    // 3. Fall back to CWD slug match (mtime-based)
+    tryLogCandidates("CWD slug match (mtime)", () => findSessionLogsForCwd(projectRoot));
+
+    // 4. Fall back to ancestor directory walk
+    tryLogCandidates("Directory ancestor walk", () => findSessionLogsByAncestorWalk(projectRoot));
   }
 
   if (!lastMessage) {

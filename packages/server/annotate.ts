@@ -11,7 +11,7 @@
  *   PLANNOTATOR_PORT   - Fixed port to use (default: random locally, 19432 for remote)
  */
 
-import { isRemoteSession, getServerPort } from "./remote";
+import { isRemoteSession, getServerHostname, getServerPort } from "./remote";
 import { getRepoInfo } from "./repo";
 import type { Origin } from "@plannotator/shared/agents";
 import { handleImage, handleUpload, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleFavicon } from "./shared-handlers";
@@ -48,6 +48,8 @@ export interface AnnotateServerOptions {
   shareBaseUrl?: string;
   /** Base URL of the paste service API for short URL sharing */
   pasteApiUrl?: string;
+  /** Source attribution: original URL or filename (e.g. "https://..." or "index.html") */
+  sourceInfo?: string;
   /** Called when server starts with the URL, remote status, and port */
   onReady?: (url: string, isRemote: boolean, port: number) => void;
 }
@@ -92,6 +94,7 @@ export async function startAnnotateServer(
     origin,
     mode = "annotate",
     folderPath,
+    sourceInfo,
     sharingEnabled = true,
     shareBaseUrl,
     pasteApiUrl,
@@ -128,6 +131,7 @@ export async function startAnnotateServer(
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       server = Bun.serve({
+        hostname: getServerHostname(),
         port: configuredPort,
 
         async fetch(req, server) {
@@ -140,6 +144,7 @@ export async function startAnnotateServer(
               origin,
               mode,
               filePath,
+              sourceInfo,
               sharingEnabled,
               shareBaseUrl,
               pasteApiUrl,
@@ -172,9 +177,10 @@ export async function startAnnotateServer(
           }
 
           // API: Serve a linked markdown document
-          // Inject source file's directory as base for relative path resolution
+          // Inject source file's directory as base for relative path resolution.
+          // Skip base injection for URL annotations — there's no local directory to resolve against.
           if (url.pathname === "/api/doc" && req.method === "GET") {
-            if (!url.searchParams.has("base")) {
+            if (!url.searchParams.has("base") && !/^https?:\/\//i.test(filePath)) {
               const docUrl = new URL(req.url);
               docUrl.searchParams.set("base", dirname(filePath));
               return handleDoc(new Request(docUrl.toString()));

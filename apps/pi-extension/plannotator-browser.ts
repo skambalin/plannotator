@@ -24,6 +24,7 @@ import {
 } from "./generated/pr-provider.js";
 import { parseRemoteUrl } from "./generated/repo.js";
 import { fetchRef, createWorktree, removeWorktree, ensureObjectAvailable } from "./generated/worktree.js";
+import { loadConfig, resolveDefaultDiffType } from "./generated/config.js";
 
 export type AnnotateMode = "annotate" | "annotate-folder" | "annotate-last";
 export interface PlanReviewDecision {
@@ -336,7 +337,7 @@ export async function openCodeReview(
 		const cwd = options.cwd ?? ctx.cwd;
 		gitCtx = await getGitContext(cwd);
 		const defaultBranch = options.defaultBranch ?? gitCtx.defaultBranch;
-		diffType = options.diffType ?? "uncommitted";
+		diffType = options.diffType ?? resolveDefaultDiffType(loadConfig());
 		const result = await runGitDiff(diffType, defaultBranch, cwd);
 		rawPatch = result.patch;
 		gitRef = result.label;
@@ -355,6 +356,7 @@ export async function openCodeReview(
 		htmlContent: reviewHtmlContent,
 		sharingEnabled: process.env.PLANNOTATOR_SHARE !== "disabled",
 		shareBaseUrl: process.env.PLANNOTATOR_SHARE_URL || undefined,
+		pasteApiUrl: process.env.PLANNOTATOR_PASTE_URL || undefined,
 		onCleanup: worktreeCleanup,
 	});
 
@@ -367,6 +369,7 @@ export async function openMarkdownAnnotation(
 	markdown: string,
 	mode: AnnotateMode,
 	folderPath?: string,
+	sourceInfo?: string,
 ): Promise<{ feedback: string; exit?: boolean }> {
 	if (!ctx.hasUI || !planHtmlContent) {
 		throw new Error("Plannotator annotation browser is unavailable in this session.");
@@ -390,6 +393,7 @@ export async function openMarkdownAnnotation(
 		origin: "pi",
 		mode,
 		folderPath,
+		sourceInfo,
 		htmlContent: planHtmlContent,
 		sharingEnabled: process.env.PLANNOTATOR_SHARE !== "disabled",
 		shareBaseUrl: process.env.PLANNOTATOR_SHARE_URL || undefined,

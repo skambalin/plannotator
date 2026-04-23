@@ -20,7 +20,12 @@ import {
 } from "@plannotator/server/annotate";
 import { getGitContext, runGitDiffWithContext } from "@plannotator/server/git";
 import { parsePRUrl, checkPRAuth, fetchPR, getCliName, getMRLabel, getMRNumberLabel, getDisplayRepo } from "@plannotator/server/pr";
-import { resolveMarkdownFile } from "@plannotator/shared/resolve-file";
+import { loadConfig, resolveDefaultDiffType, resolveUseJina } from "@plannotator/shared/config";
+import { resolveMarkdownFile, resolveUserPath } from "@plannotator/shared/resolve-file";
+import { htmlToMarkdown } from "@plannotator/shared/html-to-markdown";
+import { urlToMarkdown } from "@plannotator/shared/url-to-markdown";
+import { statSync } from "fs";
+import path from "path";
 
 /** Shared dependencies injected by the plugin */
 export interface CommandDeps {
@@ -29,6 +34,7 @@ export interface CommandDeps {
   reviewHtmlContent: string;
   getSharingEnabled: () => Promise<boolean>;
   getShareBaseUrl: () => string | undefined;
+  getPasteApiUrl: () => string | undefined;
   directory?: string;
 }
 
@@ -45,6 +51,7 @@ export async function handleReviewCommand(
   let rawPatch: string;
   let gitRef: string;
   let diffError: string | undefined;
+  let userDiffType: import("@plannotator/shared/config").DefaultDiffType | undefined;
   let gitContext: Awaited<ReturnType<typeof getGitContext>> | undefined;
   let prMetadata: Awaited<ReturnType<typeof fetchPR>>["metadata"] | undefined;
 
@@ -78,7 +85,8 @@ export async function handleReviewCommand(
     client.app.log({ level: "info", message: "Opening code review UI..." });
 
     gitContext = await getGitContext(directory);
-    const diffResult = await runGitDiffWithContext("uncommitted", gitContext);
+    userDiffType = resolveDefaultDiffType(loadConfig());
+    const diffResult = await runGitDiffWithContext(userDiffType, gitContext);
     rawPatch = diffResult.patch;
     gitRef = diffResult.label;
     diffError = diffResult.error;
@@ -89,7 +97,7 @@ export async function handleReviewCommand(
     gitRef,
     error: diffError,
     origin: "opencode",
-    diffType: isPRMode ? undefined : "uncommitted",
+    diffType: isPRMode ? undefined : userDiffType,
     gitContext,
     prMetadata,
     sharingEnabled: await getSharingEnabled(),
@@ -140,43 +148,88 @@ export async function handleAnnotateCommand(
   event: any,
   deps: CommandDeps
 ) {
-  const { client, htmlContent, getSharingEnabled, getShareBaseUrl } = deps;
+  const { client, htmlContent, getSharingEnabled, getShareBaseUrl, getPasteApiUrl } = deps;
 
   // @ts-ignore - Event properties contain arguments
   const filePath = event.properties?.arguments || event.arguments || "";
 
   if (!filePath) {
-    client.app.log({ level: "error", message: "Usage: /plannotator-annotate <file.md>" });
+    client.app.log({ level: "error", message: "Usage: /plannotator-annotate <file.md | file.html | https://...>" });
     return;
   }
 
-  client.app.log({ level: "info", message: `Opening annotation UI for ${filePath}...` });
+  let markdown: string;
+  let absolutePath: string;
+  let sourceInfo: string | undefined;
 
-  const projectRoot = process.cwd();
-  const resolved = await resolveMarkdownFile(filePath, projectRoot);
+  // --- URL annotation ---
+  const isUrl = /^https?:\/\//i.test(filePath);
 
-  if (resolved.kind === "ambiguous") {
-    client.app.log({
-      level: "error",
-      message: `Ambiguous filename "${resolved.input}" — found ${resolved.matches.length} matches:\n${resolved.matches.map((m) => `  ${m}`).join("\n")}`,
-    });
-    return;
+  if (isUrl) {
+    const useJina = resolveUseJina(false, loadConfig());
+    client.app.log({ level: "info", message: `Fetching: ${filePath}${useJina ? " (via Jina Reader)" : " (via fetch+Turndown)"}...` });
+    try {
+      const result = await urlToMarkdown(filePath, { useJina });
+      markdown = result.markdown;
+    } catch (err) {
+      client.app.log({ level: "error", message: `Failed to fetch URL: ${err instanceof Error ? err.message : String(err)}` });
+      return;
+    }
+    absolutePath = filePath;
+    sourceInfo = filePath;
+  } else {
+    const projectRoot = process.cwd();
+    const resolvedArg = resolveUserPath(filePath, projectRoot);
+
+    if (/\.html?$/i.test(resolvedArg)) {
+      // HTML file annotation — convert to markdown via Turndown
+      let fileSize: number;
+      try {
+        fileSize = statSync(resolvedArg).size;
+      } catch {
+        client.app.log({ level: "error", message: `File not found: ${filePath}` });
+        return;
+      }
+      if (fileSize > 10 * 1024 * 1024) {
+        client.app.log({ level: "error", message: `File too large (${Math.round(fileSize / 1024 / 1024)}MB, max 10MB)` });
+        return;
+      }
+      const html = await Bun.file(resolvedArg).text();
+      markdown = htmlToMarkdown(html);
+      absolutePath = resolvedArg;
+      sourceInfo = path.basename(resolvedArg);
+      client.app.log({ level: "info", message: `Converted: ${absolutePath}` });
+    } else {
+      // Markdown file annotation
+      client.app.log({ level: "info", message: `Opening annotation UI for ${filePath}...` });
+      const resolved = await resolveMarkdownFile(filePath, projectRoot);
+
+      if (resolved.kind === "ambiguous") {
+        client.app.log({
+          level: "error",
+          message: `Ambiguous filename "${resolved.input}" — found ${resolved.matches.length} matches:\n${resolved.matches.map((m) => `  ${m}`).join("\n")}`,
+        });
+        return;
+      }
+      if (resolved.kind === "not_found") {
+        client.app.log({ level: "error", message: `File not found: ${resolved.input}` });
+        return;
+      }
+
+      absolutePath = resolved.path;
+      client.app.log({ level: "info", message: `Resolved: ${absolutePath}` });
+      markdown = await Bun.file(absolutePath).text();
+    }
   }
-  if (resolved.kind === "not_found") {
-    client.app.log({ level: "error", message: `File not found: ${resolved.input}` });
-    return;
-  }
-
-  const absolutePath = resolved.path;
-  client.app.log({ level: "info", message: `Resolved: ${absolutePath}` });
-  const markdown = await Bun.file(absolutePath).text();
 
   const server = await startAnnotateServer({
     markdown,
     filePath: absolutePath,
     origin: "opencode",
+    sourceInfo,
     sharingEnabled: await getSharingEnabled(),
     shareBaseUrl: getShareBaseUrl(),
+    pasteApiUrl: getPasteApiUrl(),
     htmlContent,
     onReady: handleAnnotateServerReady,
   });
@@ -220,7 +273,7 @@ export async function handleAnnotateLastCommand(
   event: any,
   deps: CommandDeps
 ): Promise<string | null> {
-  const { client, htmlContent, getSharingEnabled, getShareBaseUrl } = deps;
+  const { client, htmlContent, getSharingEnabled, getShareBaseUrl, getPasteApiUrl } = deps;
 
   // @ts-ignore - Event properties contain sessionID
   const sessionId = event.properties?.sessionID;
@@ -266,6 +319,7 @@ export async function handleAnnotateLastCommand(
     mode: "annotate-last",
     sharingEnabled: await getSharingEnabled(),
     shareBaseUrl: getShareBaseUrl(),
+    pasteApiUrl: getPasteApiUrl(),
     htmlContent,
     onReady: handleAnnotateServerReady,
   });
@@ -285,7 +339,7 @@ export async function handleArchiveCommand(
   event: any,
   deps: CommandDeps
 ) {
-  const { client, htmlContent, getSharingEnabled, getShareBaseUrl } = deps;
+  const { client, htmlContent, getSharingEnabled, getShareBaseUrl, getPasteApiUrl } = deps;
 
   client.app.log({ level: "info", message: "Opening plan archive..." });
 
@@ -295,6 +349,7 @@ export async function handleArchiveCommand(
     mode: "archive",
     sharingEnabled: await getSharingEnabled(),
     shareBaseUrl: getShareBaseUrl(),
+    pasteApiUrl: getPasteApiUrl(),
     htmlContent,
     onReady: handleServerReady,
   });
