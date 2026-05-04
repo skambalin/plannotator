@@ -1,4 +1,5 @@
 import React from "react";
+import { isCodeFilePath, isCodeFilePathStrict } from "@plannotator/shared/code-file";
 import { transformPlainText } from "../utils/inlineTransforms";
 import { getImageSrc } from "./ImageThumbnail";
 
@@ -7,6 +8,19 @@ function sanitizeLinkUrl(url: string): string | null {
   if (DANGEROUS_PROTOCOL.test(url)) return null;
   return url;
 }
+
+const CodeFileIcon = () => (
+  <svg
+    className="w-3 h-3 opacity-50 flex-shrink-0"
+    fill="none"
+    viewBox="0 0 24 24"
+    stroke="currentColor"
+    strokeWidth={2}
+    aria-hidden="true"
+  >
+    <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+  </svg>
+);
 
 // Trim trailing sentence punctuation from a bare URL, but keep closing
 // brackets when they balance an opener inside the URL (Wikipedia-style
@@ -31,43 +45,91 @@ export function trimUrlTail(url: string): string {
   return url;
 }
 
-// Scan a plain-text chunk for bare https?:// URLs at word boundaries and
-// emit them as anchor nodes, passing surrounding text through
-// transformPlainText so emoji shortcodes and smart punctuation still apply
-// to the non-URL slices.
+// Scan a plain-text chunk for bare https?:// URLs and bare code file paths
+// at word boundaries, emitting them as interactive nodes. Surrounding text
+// passes through transformPlainText for emoji shortcodes + smart punctuation.
 function emitPlainTextWithBareUrls(
   text: string,
   previousChar: string,
   parts: React.ReactNode[],
   nextKey: () => number,
+  onOpenCodeFile?: (path: string) => void,
 ): void {
   if (text.length === 0) return;
-  const re = /https?:\/\/[^\s<>"']+/g;
-  let last = 0;
+
+  type Span = { start: number; end: number; kind: 'url'; value: string }
+    | { start: number; end: number; kind: 'path'; value: string };
+  const spans: Span[] = [];
+
+  // Collect bare URLs
+  const urlRe = /https?:\/\/[^\s<>"']+/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = urlRe.exec(text)) !== null) {
     const before = m.index === 0 ? previousChar : text[m.index - 1];
     if (/\w/.test(before)) continue;
-    const raw = m[0];
-    const url = trimUrlTail(raw);
+    const url = trimUrlTail(m[0]);
     const safe = url.length > 0 ? sanitizeLinkUrl(url) : null;
     if (!safe) continue;
-    if (m.index > last) {
-      parts.push(transformPlainText(text.slice(last, m.index)));
+    spans.push({ start: m.index, end: m.index + url.length, kind: 'url', value: url });
+    urlRe.lastIndex = m.index + url.length;
+  }
+
+  // Collect bare code file paths (require /)
+  if (onOpenCodeFile) {
+    const pathRe = /(?:\.{0,2}\/)?(?:[a-zA-Z0-9_@.\-]+\/)+[a-zA-Z0-9_.\-]+\.[a-zA-Z0-9]+/g;
+    while ((m = pathRe.exec(text)) !== null) {
+      const before = m.index === 0 ? previousChar : text[m.index - 1];
+      if (/\w/.test(before)) continue;
+      const candidate = m[0];
+      if (!isCodeFilePathStrict(candidate)) continue;
+      const overlaps = spans.some(s => m!.index < s.end && m!.index + candidate.length > s.start);
+      if (overlaps) continue;
+      spans.push({ start: m.index, end: m.index + candidate.length, kind: 'path', value: candidate });
     }
-    parts.push(
-      <a
-        key={nextKey()}
-        href={safe}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary underline underline-offset-2 hover:text-primary/80"
-      >
-        {url}
-      </a>,
-    );
-    last = m.index + url.length;
-    re.lastIndex = last;
+  }
+
+  if (spans.length === 0) {
+    parts.push(transformPlainText(text));
+    return;
+  }
+
+  spans.sort((a, b) => a.start - b.start);
+
+  let last = 0;
+  for (const span of spans) {
+    if (span.start > last) {
+      parts.push(transformPlainText(text.slice(last, span.start)));
+    }
+    if (span.kind === 'url') {
+      parts.push(
+        <a
+          key={nextKey()}
+          href={span.value}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary underline underline-offset-2 hover:text-primary/80"
+        >
+          {span.value}
+        </a>,
+      );
+    } else {
+      const cleanPath = span.value.replace(/#.*$/, '');
+      parts.push(
+        <code
+          key={nextKey()}
+          role="button"
+          tabIndex={0}
+          onClick={() => onOpenCodeFile!(cleanPath)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenCodeFile!(cleanPath); } }}
+          className="code-file-link px-1.5 py-0.5 rounded bg-muted text-sm font-mono cursor-pointer hover:text-primary inline-flex items-center gap-1 transition-colors"
+          title={`View: ${span.value}`}
+        >
+          {span.value}
+          <CodeFileIcon />
+        </code>,
+      );
+    }
+    last = span.end;
   }
   if (last < text.length) {
     parts.push(transformPlainText(text.slice(last)));
@@ -85,10 +147,12 @@ function emitPlainTextWithBareUrls(
 export const InlineMarkdown: React.FC<{
   text: string;
   onOpenLinkedDoc?: (path: string) => void;
+  onOpenCodeFile?: (path: string) => void;
+  onNavigateAnchor?: (hash: string) => void;
   imageBaseDir?: string;
   onImageClick?: (src: string, alt: string) => void;
   githubRepo?: string;
-}> = ({ text, onOpenLinkedDoc, imageBaseDir, onImageClick, githubRepo }) => {
+}> = ({ text, onOpenLinkedDoc, onOpenCodeFile, onNavigateAnchor, imageBaseDir, onImageClick, githubRepo }) => {
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let key = 0;
@@ -179,8 +243,10 @@ export const InlineMarkdown: React.FC<{
             onImageClick={onImageClick}
             text={match[1]}
             onOpenLinkedDoc={onOpenLinkedDoc}
+            onOpenCodeFile={onOpenCodeFile}
+            onNavigateAnchor={onNavigateAnchor}
             githubRepo={githubRepo}
-/>
+          />
         </del>,
       );
       remaining = remaining.slice(match[0].length);
@@ -199,8 +265,10 @@ export const InlineMarkdown: React.FC<{
               onImageClick={onImageClick}
               text={match[1]}
               onOpenLinkedDoc={onOpenLinkedDoc}
-            githubRepo={githubRepo}
-  />
+              onOpenCodeFile={onOpenCodeFile}
+              onNavigateAnchor={onNavigateAnchor}
+              githubRepo={githubRepo}
+            />
           </em>
         </strong>,
       );
@@ -219,8 +287,10 @@ export const InlineMarkdown: React.FC<{
             onImageClick={onImageClick}
             text={match[1]}
             onOpenLinkedDoc={onOpenLinkedDoc}
+            onOpenCodeFile={onOpenCodeFile}
+            onNavigateAnchor={onNavigateAnchor}
             githubRepo={githubRepo}
-/>
+          />
         </strong>,
       );
       remaining = remaining.slice(match[0].length);
@@ -238,8 +308,10 @@ export const InlineMarkdown: React.FC<{
             onImageClick={onImageClick}
             text={match[1]}
             onOpenLinkedDoc={onOpenLinkedDoc}
+            onOpenCodeFile={onOpenCodeFile}
+            onNavigateAnchor={onNavigateAnchor}
             githubRepo={githubRepo}
-/>
+          />
         </em>,
       );
       remaining = remaining.slice(match[0].length);
@@ -258,8 +330,10 @@ export const InlineMarkdown: React.FC<{
             onImageClick={onImageClick}
             text={match[1]}
             onOpenLinkedDoc={onOpenLinkedDoc}
+            onOpenCodeFile={onOpenCodeFile}
+            onNavigateAnchor={onNavigateAnchor}
             githubRepo={githubRepo}
-/>
+          />
         </em>,
       );
       remaining = remaining.slice(match[0].length);
@@ -267,17 +341,36 @@ export const InlineMarkdown: React.FC<{
       continue;
     }
 
-    // Inline code: `code`
+    // Inline code: `code` — when the content is a code file path, render as clickable
     match = remaining.match(/^`([^`]+)`/);
     if (match) {
-      parts.push(
-        <code
-          key={key++}
-          className="px-1.5 py-0.5 rounded bg-muted text-sm font-mono"
-        >
-          {match[1]}
-        </code>,
-      );
+      const codeContent = match[1];
+      if (isCodeFilePath(codeContent) && onOpenCodeFile) {
+        const cleanPath = codeContent.replace(/#.*$/, '');
+        parts.push(
+          <code
+            key={key++}
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpenCodeFile(cleanPath)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenCodeFile(cleanPath); } }}
+            className="code-file-link px-1.5 py-0.5 rounded bg-muted text-sm font-mono cursor-pointer hover:text-primary inline-flex items-center gap-1 transition-colors"
+            title={`View: ${codeContent}`}
+          >
+            {codeContent}
+            <CodeFileIcon />
+          </code>,
+        );
+      } else {
+        parts.push(
+          <code
+            key={key++}
+            className="px-1.5 py-0.5 rounded bg-muted text-sm font-mono"
+          >
+            {codeContent}
+          </code>,
+        );
+      }
       remaining = remaining.slice(match[0].length);
       previousChar = match[0][match[0].length - 1] || previousChar;
       continue;
@@ -499,9 +592,26 @@ export const InlineMarkdown: React.FC<{
         /\.(mdx?|html?)(#.*)?$/i.test(linkUrl) &&
         !linkUrl.startsWith("http://") &&
         !linkUrl.startsWith("https://");
+      const isCodeFile = !isLocalDoc && isCodeFilePath(linkUrl);
       const linkedDocPath = isLocalDoc ? linkUrl.replace(/#.*$/, '') : linkUrl;
+      const codeFilePath = isCodeFile ? linkUrl.replace(/#.*$/, '') : linkUrl;
+      const isInPageAnchor = safeLinkUrl.startsWith('#');
 
-      if (isLocalDoc && onOpenLinkedDoc) {
+      if (isInPageAnchor) {
+        parts.push(
+          <a
+            key={key++}
+            href={safeLinkUrl}
+            onClick={onNavigateAnchor ? (e) => {
+              e.preventDefault();
+              onNavigateAnchor(safeLinkUrl);
+            } : undefined}
+            className="text-primary underline underline-offset-2 hover:text-primary/80"
+          >
+            {linkText}
+          </a>,
+        );
+      } else if (isLocalDoc && onOpenLinkedDoc) {
         parts.push(
           <a
             key={key++}
@@ -528,6 +638,22 @@ export const InlineMarkdown: React.FC<{
                 d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
               />
             </svg>
+          </a>,
+        );
+      } else if (isCodeFile && onOpenCodeFile) {
+        parts.push(
+          <a
+            key={key++}
+            href={safeLinkUrl}
+            onClick={(e) => {
+              e.preventDefault();
+              onOpenCodeFile(codeFilePath);
+            }}
+            className="text-primary underline underline-offset-2 hover:text-primary/80 inline-flex items-center gap-1 cursor-pointer"
+            title={`View: ${linkUrl}`}
+          >
+            {linkText}
+            <CodeFileIcon />
           </a>,
         );
       } else if (isLocalDoc) {
@@ -569,8 +695,10 @@ export const InlineMarkdown: React.FC<{
             key={key++}
             text={before}
             onOpenLinkedDoc={onOpenLinkedDoc}
+            onOpenCodeFile={onOpenCodeFile}
+            onNavigateAnchor={onNavigateAnchor}
             githubRepo={githubRepo}
-  imageBaseDir={imageBaseDir}
+            imageBaseDir={imageBaseDir}
             onImageClick={onImageClick}
           />,
         );
@@ -588,7 +716,7 @@ export const InlineMarkdown: React.FC<{
     // detected inline via emitPlainTextWithBareUrls() below.
     const nextSpecial = remaining.slice(1).search(/[\*_`\[!~\\<#@]/);
     const plainText = nextSpecial === -1 ? remaining : remaining.slice(0, nextSpecial + 1);
-    emitPlainTextWithBareUrls(plainText, previousChar, parts, () => key++);
+    emitPlainTextWithBareUrls(plainText, previousChar, parts, () => key++, onOpenCodeFile);
     previousChar = plainText[plainText.length - 1] || previousChar;
     if (nextSpecial === -1) {
       break;
