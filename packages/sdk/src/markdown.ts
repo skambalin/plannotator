@@ -1,5 +1,6 @@
 export {
   urlToMarkdown,
+  isConvertedSource,
   type UrlToMarkdownOptions,
   type UrlToMarkdownResult,
 } from "@plannotator/shared/url-to-markdown";
