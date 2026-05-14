@@ -193,7 +193,7 @@
     },
     "packages/sdk": {
       "name": "@plannotator/sdk",
-      "version": "0.19.7",
+      "version": "0.19.16",
       "devDependencies": {
         "@plannotator/ai": "workspace:*",
         "@plannotator/server": "workspace:*",
