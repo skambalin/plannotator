@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -22,7 +22,7 @@ import {
 	type PRMetadata,
 	type PRReviewFileComment,
 	prRefFromMetadata,
-} from "../generated/pr-provider.js";
+} from "../generated/pr-types.js";
 import {
 	type DiffType,
 	type GitContext,
@@ -85,6 +85,13 @@ import {
 } from "../generated/claude-review.js";
 import { createTourSession, TOUR_EMPTY_OUTPUT_ERROR } from "../generated/tour-review.js";
 import {
+	type CodeNavRequest,
+	type CodeNavRuntime,
+	resolveCodeNav,
+	validateCodeNavRequest,
+	extractChangedFiles,
+} from "../generated/code-nav.js";
+import {
 	canStageFiles,
 	detectRemoteDefaultCompareTarget,
 	getVcsContext,
@@ -95,6 +102,37 @@ import {
 	stageFile,
 	unstageFile,
 } from "./vcs.js";
+
+const piCodeNavRuntime: CodeNavRuntime = {
+	runCommand(command, args, options) {
+		return new Promise((resolve) => {
+			const proc = spawn(command, args, {
+				cwd: options?.cwd,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			if (options?.timeoutMs) {
+				timer = setTimeout(() => proc.kill(), options.timeoutMs);
+			}
+			const stdoutChunks: Buffer[] = [];
+			const stderrChunks: Buffer[] = [];
+			proc.stdout!.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+			proc.stderr!.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+			proc.on("close", (code: number | null) => {
+				if (timer) clearTimeout(timer);
+				resolve({
+					stdout: Buffer.concat(stdoutChunks).toString("utf-8"),
+					stderr: Buffer.concat(stderrChunks).toString("utf-8"),
+					exitCode: code ?? 1,
+				});
+			});
+			proc.on("error", () => {
+				if (timer) clearTimeout(timer);
+				resolve({ stdout: "", stderr: "command not found", exitCode: 1 });
+			});
+		});
+	},
+};
 
 /** Detect if running inside WSL (Windows Subsystem for Linux) */
 function detectWSL(): boolean {
@@ -168,15 +206,15 @@ export async function startReviewServer(options: {
 		? getPRDiffScopeOptions(prMeta, !!(options.worktreePool || options.agentCwd))
 		: [];
 
-	let prListCache: import("../generated/pr-provider.js").PRListItem[] | null = null;
+	let prListCache: import("../generated/pr-types.js").PRListItem[] | null = null;
 	let prListCacheTime = 0;
 	const prSwitchCache = new Map<string, { metadata: PRMetadata; rawPatch: string }>();
 	if (isPRMode && prMeta) prSwitchCache.set(prMeta.url, { metadata: prMeta, rawPatch: options.rawPatch });
-	const prStackTreeCache = new Map<string, import("../generated/pr-provider.js").PRStackTree | null>();
+	const prStackTreeCache = new Map<string, import("../generated/pr-types.js").PRStackTree | null>();
 
 	// Fetch full stack tree (best-effort — always try in PR mode so root PRs
 	// that target the default branch can still discover descendant PRs)
-	let prStackTree: import("../generated/pr-provider.js").PRStackTree | null = null;
+	let prStackTree: import("../generated/pr-types.js").PRStackTree | null = null;
 	if (prRef && prMeta) {
 		try {
 			prStackTree = await fetchPRStack(prRef, prMeta);
@@ -965,6 +1003,48 @@ export async function startReviewServer(options: {
 			}
 
 			json(res, { error: "No file access available" }, 400);
+		} else if (url.pathname === "/api/code-nav/resolve" && req.method === "POST") {
+			const hasCodeNavAccess = !!options.gitContext || !!options.agentCwd || !!options.worktreePool;
+			if (!hasCodeNavAccess) {
+				json(res, { error: "Code navigation requires local access" }, 400);
+				return;
+			}
+			try {
+				const body = (await parseBody(req)) as unknown as CodeNavRequest;
+				const error = validateCodeNavRequest(body);
+				if (error) {
+					json(res, { error }, 400);
+					return;
+				}
+				const navCwd = resolveAgentCwd();
+				const changedFiles = extractChangedFiles(currentPatch);
+				const result = await resolveCodeNav(piCodeNavRuntime, body, navCwd, changedFiles);
+				json(res, result);
+			} catch (err) {
+				json(res, { error: err instanceof Error ? err.message : "Code navigation failed" }, 500);
+			}
+		} else if (url.pathname === "/api/code-nav/file" && req.method === "GET") {
+			const hasCodeNavAccess = !!options.gitContext || !!options.agentCwd || !!options.worktreePool;
+			if (!hasCodeNavAccess) {
+				json(res, { error: "Code navigation requires local access" }, 400);
+				return;
+			}
+			const filePath = url.searchParams.get("path");
+			if (!filePath) {
+				json(res, { error: "Missing path" }, 400);
+				return;
+			}
+			try { validateFilePath(filePath); } catch {
+				json(res, { error: "Invalid path" }, 400);
+				return;
+			}
+			try {
+				const navCwd = resolveAgentCwd();
+				const content = readFileSync(`${navCwd}/${filePath}`, "utf-8");
+				json(res, { content });
+			} catch {
+				json(res, { error: "File not found" }, 404);
+			}
 		} else if (url.pathname === "/api/config" && req.method === "POST") {
 			try {
 				const body = (await parseBody(req)) as { displayName?: string; diffOptions?: Record<string, unknown>; conventionalComments?: boolean };

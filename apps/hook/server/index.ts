@@ -44,6 +44,7 @@
  *
  * Global flags:
  *   --help             - Show top-level usage information
+ *   --version, -v      - Print version and exit
  *   --browser <name>   - Override which browser to open (e.g. "Google Chrome")
  *
  * Environment variables:
@@ -89,6 +90,7 @@ import { openBrowser } from "@plannotator/server/browser";
 import { detectProjectName } from "@plannotator/server/project";
 import { hostnameOrFallback } from "@plannotator/shared/project";
 import { readImprovementHook } from "@plannotator/shared/improvement-hooks";
+import { composeImproveContext } from "@plannotator/shared/pfm-reminder";
 import { AGENT_CONFIG, type Origin } from "@plannotator/shared/agents";
 import {
   findSessionLogsByAncestorWalk,
@@ -103,8 +105,10 @@ import { findCopilotPlanContent, findCopilotSessionForCwd, getLastCopilotMessage
 import {
   formatInteractiveNoArgClarification,
   formatTopLevelHelp,
+  formatVersion,
   isInteractiveNoArgInvocation,
   isTopLevelHelpInvocation,
+  isVersionInvocation,
 } from "./cli";
 import path from "path";
 import { tmpdir } from "os";
@@ -147,6 +151,9 @@ const hookIdx = args.indexOf("--hook");
 const hookFlag = hookIdx !== -1;
 if (hookFlag) args.splice(hookIdx, 1);
 if (hookFlag) gateFlag = true;
+const renderHtmlIdx = args.indexOf("--render-html");
+const renderHtmlFlag = renderHtmlIdx !== -1;
+if (renderHtmlFlag) args.splice(renderHtmlIdx, 1);
 
 // Stdout matrix for annotate / annotate-last / copilot annotate-last (#570).
 //
@@ -196,6 +203,11 @@ function emitAnnotateOutcome(result: {
     return;
   }
   if (result.feedback) console.log(result.feedback);
+}
+
+if (isVersionInvocation(args)) {
+  console.log(formatVersion());
+  process.exit(0);
 }
 
 if (isTopLevelHelpInvocation(args)) {
@@ -589,6 +601,7 @@ if (args[0] === "sessions") {
   }
 
   let markdown: string;
+  let rawHtml: string | undefined;
   let absolutePath: string;
   let folderPath: string | undefined;
   let annotateMode: "annotate" | "annotate-folder" = "annotate";
@@ -648,11 +661,16 @@ if (args[0] === "sessions") {
           process.exit(1);
         }
         const html = await htmlFile.text();
-        markdown = htmlToMarkdown(html);
+        if (renderHtmlFlag) {
+          rawHtml = html;
+          markdown = "";
+        } else {
+          markdown = htmlToMarkdown(html);
+          sourceConverted = true;
+        }
         absolutePath = resolvedArg;
         sourceInfo = path.basename(resolvedArg);
-        sourceConverted = true;
-        console.error(`Converted: ${absolutePath}`);
+        console.error(`${renderHtmlFlag ? "Raw HTML" : "Converted"}: ${absolutePath}`);
       } else {
         // Single markdown file annotation mode
         // Strip-first with literal-@ fallback (scoped-package-style names).
@@ -695,6 +713,8 @@ if (args[0] === "sessions") {
     shareBaseUrl,
     pasteApiUrl,
     gate: gateFlag,
+    rawHtml,
+    renderHtml: renderHtmlFlag,
     htmlContent: planHtmlContent,
     onReady: async (url, isRemote, port) => {
       handleAnnotateServerReady(url, isRemote, port);
@@ -1048,21 +1068,21 @@ if (args[0] === "sessions") {
   // ============================================
   //
   // Called by PreToolUse hook on EnterPlanMode.
-  // Reads the improvement hook file and returns additionalContext.
-  // No file = exit 0 silently (passthrough).
+  // Composes any enabled context sources (compound improvement hook,
+  // PFM reminder) into a single additionalContext payload.
+  // Nothing enabled = exit 0 silently (passthrough).
 
-  // Must consume stdin (Claude Code hooks deliver event JSON on stdin)
   await Bun.stdin.text();
 
   const hook = readImprovementHook("enterplanmode-improve");
-  if (!hook) process.exit(0);
+  const pfmEnabled = loadConfig().pfmReminder === true;
 
-  const context = [
-    "[Plannotator Improvement Hook]",
-    "The following corrective instructions were generated from analysis of previous plan denial patterns.",
-    "Apply these guidelines when writing your plan:\n",
-    hook.content,
-  ].join("\n");
+  const context = composeImproveContext({
+    pfmEnabled,
+    improvementHookContent: hook?.content ?? null,
+  });
+
+  if (context === null) process.exit(0);
 
   console.log(JSON.stringify({
     hookSpecificOutput: {

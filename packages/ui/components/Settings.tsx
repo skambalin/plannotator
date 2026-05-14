@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import type { Origin } from '@plannotator/shared/agents';
+import type { DiffLineBgIntensity } from '@plannotator/shared/config';
 import { configStore, useConfigValue } from '../config';
 import { loadDiffFont } from '../utils/diffFonts';
 import { TaterSpritePullup } from './TaterSpritePullup';
@@ -62,6 +63,7 @@ import { ThemeTab } from './ThemeTab';
 import { isMac, modKey, altKey } from '../utils/platform';
 import { getAIProviderSettings } from '../utils/aiProvider';
 import { AISettingsTab } from './AISettingsTab';
+import { HooksTab } from './settings/HooksTab';
 import { OverlayScrollArea } from './OverlayScrollArea';
 import {
   getFileBrowserSettings,
@@ -69,7 +71,7 @@ import {
   type FileBrowserSettings,
 } from '../utils/fileBrowser';
 
-type SettingsTab = 'general' | 'theme' | 'git' | 'display' | 'saving' | 'labels' | 'shortcuts' | 'ai' | 'files' | 'obsidian' | 'bear' | 'octarine' | 'comments';
+type SettingsTab = 'general' | 'theme' | 'git' | 'display' | 'saving' | 'labels' | 'shortcuts' | 'ai' | 'files' | 'obsidian' | 'bear' | 'octarine' | 'comments' | 'hooks';
 
 interface SettingsProps {
   taterMode: boolean;
@@ -120,6 +122,11 @@ export const LINE_DIFF_OPTIONS = [
   { value: 'word' as const, label: 'Word' },
   { value: 'char' as const, label: 'Char' },
   { value: 'none' as const, label: 'None' },
+];
+export const LINE_BG_INTENSITY_OPTIONS: { value: DiffLineBgIntensity; label: string }[] = [
+  { value: 'subtle', label: 'Subtle' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'strong', label: 'Strong' },
 ];
 const DEFAULT_DIFF_TYPE_OPTIONS = [
   { value: 'uncommitted' as const, label: 'All Changes', description: "Everything you've changed since your last commit" },
@@ -228,6 +235,7 @@ const ReviewDisplayTab: React.FC = () => {
   const diffLineDiffType = useConfigValue('diffLineDiffType');
   const diffShowLineNumbers = useConfigValue('diffShowLineNumbers');
   const diffShowBackground = useConfigValue('diffShowBackground');
+  const diffLineBgIntensity = useConfigValue('diffLineBgIntensity');
   const diffHideWhitespace = useConfigValue('diffHideWhitespace');
   const diffFontFamily = useConfigValue('diffFontFamily');
   const diffFontSize = useConfigValue('diffFontSize');
@@ -361,6 +369,17 @@ const ReviewDisplayTab: React.FC = () => {
         label="Show Diff Background"
         description="Colored backgrounds on added/deleted lines"
       />
+
+      {/* Line Background Intensity */}
+      {diffShowBackground && (
+        <div className="space-y-2 pl-4">
+          <div>
+            <div className="text-sm font-medium">Line Background Intensity</div>
+            <div className="text-xs text-muted-foreground">How prominent the colored line backgrounds appear</div>
+          </div>
+          <SegmentedControl options={LINE_BG_INTENSITY_OPTIONS} value={diffLineBgIntensity} onChange={(v) => configStore.set('diffLineBgIntensity', v)} />
+        </div>
+      )}
 
       <div className="border-t border-border" />
 
@@ -640,6 +659,9 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
       }
     }
     t.push({ id: 'shortcuts', label: 'Shortcuts' });
+    if (mode === 'plan') {
+      t.push({ id: 'hooks', label: 'Hooks' });
+    }
     return t;
   }, [mode, aiProviders.length]);
 
@@ -1707,6 +1729,9 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                     )}
                   </>
                 )}
+
+                {/* === HOOKS TAB === */}
+                {activeTab === 'hooks' && <HooksTab />}
 
                 {/* === OBSIDIAN TAB === */}
                 {activeTab === 'obsidian' && (
